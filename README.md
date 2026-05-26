@@ -31,7 +31,6 @@ Pixel Bug Beta is a desktop pixel-art and sprite editor built with Electron.
   - `assets/icon.png`
   - `assets/icon.ico`
 
-![PixelBug Screenshot](https://raw.githubusercontent.com/keyouts/PixelBugBeta/ce1dd0510bd3582a7aaf31f4bcf31864d1e1018b/PixelBugScreenshot.jpg)
 ---
 
 ## Run
