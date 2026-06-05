@@ -89,7 +89,7 @@ const STORAGE_TOUCH_KEY = "pixel-bug-touch-mode";
 const STORAGE_TOUCH_HAND_KEY = "pixel-bug-touch-hand";
 const STORAGE_TOUCH_TOOLS_COLLAPSED_KEY = "pixel-bug-touch-tools-collapsed";
 const STORAGE_KEY = "pixel-bug-autosave";
-const STARTUP_DEFER_MS = 0;
+const STARTUP_DEFER_MS = 16;
 const MAX_AUTOSAVE_CHARS = 12 * 1024 * 1024;
 const refBtn = $("#ref-btn");
 const storyBtn = $("#story-btn");
@@ -313,6 +313,12 @@ let undoStack = [];
 let redoStack = [];
 let importedImage = null;
 let pixelizedPixels = null;
+let pixelizerFrame = 0;
+let pixelizerTmpCanvas = null;
+let pixelizerTmpCtx = null;
+let pixelizerPreviewBuffer = null;
+let pixelizerPreviewImage = null;
+let pixelizerPreviewBitmap = null;
 let symmetryMode = false;
 let storyboardMode = false;
 let selectionBox = null;
@@ -3991,8 +3997,12 @@ function quantizeChannel(value, levels) {
   if (levels <= 1) return value < 128 ? 0 : 255;
   return Math.round(Math.round((value / 255) * (levels - 1)) * (255 / (levels - 1)));
 }
+const HEX_PAIRS = Array.from({ length: 256 }, (_value, index) => index.toString(16).padStart(2, "0"));
 function rgbToHex(r, g, b) {
-  return "#" + [r, g, b].map(v => Math.max(0, Math.min(255, v)).toString(16).padStart(2, "0")).join("");
+  return `#${HEX_PAIRS[Math.max(0, Math.min(255, r))]}${HEX_PAIRS[Math.max(0, Math.min(255, g))]}${HEX_PAIRS[Math.max(0, Math.min(255, b))]}`;
+}
+function rgbaWord(r, g, b, a = 255) {
+  return (a << 24) | (b << 16) | (g << 8) | r;
 }
 function updatePixelizerLabels() {
   const size = Number(pixelizeSizeInput.value);
@@ -4022,15 +4032,26 @@ function clearPixelizerPreview(message = "Upload an image to pixelize.") {
   pixelizePreviewCtx.textAlign = "center";
   pixelizePreviewCtx.fillText(message, pixelizePreviewCanvas.width / 2, pixelizePreviewCanvas.height / 2);
 }
+function ensurePixelizerCanvases(target) {
+  if (!pixelizerTmpCanvas) {
+    pixelizerTmpCanvas = document.createElement("canvas");
+    pixelizerTmpCtx = pixelizerTmpCanvas.getContext("2d", { willReadFrequently: true });
+  }
+  if (pixelizerTmpCanvas.width !== target || pixelizerTmpCanvas.height !== target) {
+    pixelizerTmpCanvas.width = target;
+    pixelizerTmpCanvas.height = target;
+    pixelizerPreviewBuffer = null;
+    pixelizerPreviewImage = null;
+    pixelizerPreviewBitmap = null;
+  }
+}
 function makePixelizedPixels() {
   if (!importedImage) return null;
-  const target = Number(pixelizeSizeInput.value);
-  const levels = Number(pixelizeColorsInput.value);
+  const target = Math.max(1, Math.min(512, Number(pixelizeSizeInput.value) || pixelizerProjectSize()));
+  const levels = Math.max(1, Math.min(256, Number(pixelizeColorsInput.value) || 2));
   const fit = pixelizeFitInput.checked;
-  const tmp = document.createElement("canvas");
-  tmp.width = target;
-  tmp.height = target;
-  const tx = tmp.getContext("2d", { willReadFrequently: true });
+  ensurePixelizerCanvases(target);
+  const tx = pixelizerTmpCtx;
   tx.imageSmoothingEnabled = true;
   tx.clearRect(0, 0, target, target);
 
@@ -4042,18 +4063,25 @@ function makePixelizedPixels() {
   }
   tx.drawImage(importedImage, dx, dy, dw, dh);
   const data = tx.getImageData(0, 0, target, target);
-  const out = Array.from({ length: target }, () => Array.from({ length: target }, () => null));
+  const out = new Array(target);
+  if (!pixelizerPreviewBuffer || pixelizerPreviewBuffer.length !== target * target) pixelizerPreviewBuffer = new Uint32Array(target * target);
+  pixelizerPreviewBuffer.fill(0);
   for (let y = 0; y < target; y++) {
+    const row = new Array(target);
+    const rowOffset = y * target;
     for (let x = 0; x < target; x++) {
-      const idx = (y * target + x) * 4;
+      const idx = (rowOffset + x) * 4;
       const a = data.data[idx + 3];
-      if (a < 20) continue;
+      if (a < 20) { row[x] = null; continue; }
       const r = quantizeChannel(data.data[idx], levels);
       const g = quantizeChannel(data.data[idx + 1], levels);
       const b = quantizeChannel(data.data[idx + 2], levels);
-      out[y][x] = rgbToHex(r, g, b);
+      row[x] = rgbToHex(r, g, b);
+      pixelizerPreviewBuffer[rowOffset + x] = rgbaWord(r, g, b);
     }
+    out[y] = row;
   }
+  pixelizerPreviewImage = new ImageData(new Uint8ClampedArray(pixelizerPreviewBuffer.buffer), target, target);
   return out;
 }
 function drawPixelizerPreview() {
@@ -4063,17 +4091,17 @@ function drawPixelizerPreview() {
   pixelizePreviewCtx.clearRect(0, 0, pixelizePreviewCanvas.width, pixelizePreviewCanvas.height);
   pixelizePreviewCtx.fillStyle = canvasBackgroundColor();
   pixelizePreviewCtx.fillRect(0, 0, pixelizePreviewCanvas.width, pixelizePreviewCanvas.height);
-  if (!pixelizedPixels) return clearPixelizerPreview();
+  if (!pixelizedPixels || !pixelizerPreviewImage) return clearPixelizerPreview();
   const size = pixelizedPixels.length;
-  const scale = pixelizePreviewCanvas.width / size;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const c = pixelizedPixels[y][x];
-      if (!c) continue;
-      pixelizePreviewCtx.fillStyle = c;
-      pixelizePreviewCtx.fillRect(Math.floor(x * scale), Math.floor(y * scale), Math.ceil(scale), Math.ceil(scale));
-    }
-  }
+  ensurePixelizerCanvases(size);
+  pixelizerTmpCtx.putImageData(pixelizerPreviewImage, 0, 0);
+  pixelizePreviewCtx.drawImage(pixelizerTmpCanvas, 0, 0, pixelizePreviewCanvas.width, pixelizePreviewCanvas.height);
+}
+function schedulePixelizerPreview() {
+  updatePixelizerLabels();
+  if (!importedImage) return;
+  cancelAnimationFrame(pixelizerFrame);
+  pixelizerFrame = requestAnimationFrame(drawPixelizerPreview);
 }
 function resamplePixelsToProject(sourcePixels, targetWidth, targetHeight = targetWidth) {
   const sourceHeight = sourcePixels.length;
@@ -6092,9 +6120,9 @@ if (openPrivacyBtn) openPrivacyBtn.onclick = openPrivacyModal;
 if (closePrivacyBtn) closePrivacyBtn.onclick = closePrivacyModal;
 privacyOverlay.addEventListener("click", e => { if (e.target === privacyOverlay) closePrivacyModal(); });
 imageImportInput.onchange = e => loadImageFile(e.target.files[0]);
-pixelizeSizeInput.oninput = () => { updatePixelizerLabels(); if (importedImage) drawPixelizerPreview(); };
-pixelizeColorsInput.oninput = () => { updatePixelizerLabels(); if (importedImage) drawPixelizerPreview(); };
-pixelizeFitInput.onchange = () => { if (importedImage) drawPixelizerPreview(); };
+pixelizeSizeInput.oninput = schedulePixelizerPreview;
+pixelizeColorsInput.oninput = schedulePixelizerPreview;
+pixelizeFitInput.onchange = schedulePixelizerPreview;
 if (pixelTextScaleInput) pixelTextScaleInput.oninput = updatePixelTextLabel;
 $("#pixelize-import-btn").onclick = importPixelizedImage;
 
