@@ -14,6 +14,7 @@ Pixel Bug Beta is a desktop pixel-art and sprite editor built with Electron.
   - opacity
   - copy/delete
   - ordering controls
+  - reference image import
 - Animation frames with:
   - copy/delete
   - per-frame duration
@@ -26,6 +27,7 @@ Pixel Bug Beta is a desktop pixel-art and sprite editor built with Electron.
 - Local autosave
 - Project save/open using `.pxbuild`
 - PNG, spritesheet, and GIF export
+- Play mode to mock up / export short interactive sidescrollers and dialogue
 - Adjustable sidebar layout
 - App icon support through:
   - `assets/icon.png`
