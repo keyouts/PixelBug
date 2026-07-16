@@ -1,0 +1,65 @@
+{
+  "name": "pixel-bug",
+  "version": "1.3.23",
+  "description": "Pixel art and sprite editor",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "build": "electron-builder",
+    "dist": "electron-builder"
+  },
+  "keywords": [
+    "electron",
+    "pixel-art",
+    "sprite",
+    "editor"
+  ],
+  "author": "KeyOuts",
+  "license": "GPL-3.0-or-later",
+  "devDependencies": {
+    "electron": "42.0.1",
+    "electron-builder": "26.8.1"
+  },
+  "productName": "Pixel Bug",
+  "build": {
+    "appId": "com.pixelbug.app",
+    "productName": "Pixel Bug",
+    "directories": {
+      "buildResources": "assets",
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json",
+      "integrations/**/*"
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": "nsis"
+    },
+    "mac": {
+      "icon": "assets/icon.png",
+      "target": "dmg"
+    },
+    "linux": {
+      "icon": "assets/icon.png",
+      "target": "AppImage"
+    },
+    "nsis": {
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Pixel Bug"
+    },
+    "asar": true,
+    "electronFuses": {
+      "runAsNode": false,
+      "enableCookieEncryption": true,
+      "enableNodeOptionsEnvironmentVariable": false,
+      "enableNodeCliInspectArguments": false,
+      "enableEmbeddedAsarIntegrityValidation": true,
+      "onlyLoadAppFromAsar": true
+    }
+  }
+}
