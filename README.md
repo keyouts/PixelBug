@@ -94,6 +94,8 @@ Pixel Bug is a desktop pixel-art, animation, voxel, print, and small-game editor
 - Separate locked guides and cutline preview layers
 - Export Print PNG, Cutline SVG, and Calibration PNG
 
+[![Pixel Bug - Play Mode](https://img.youtube.com/vi/5ITtf6u3Zmo/maxresdefault.jpg)](https://youtu.be/5ITtf6u3Zmo)
+
 ### Play Mode
 
 - Modular Builder, Scene, Player & World, Layers, Objects, Characters, Dialogue, and Rules workspaces
