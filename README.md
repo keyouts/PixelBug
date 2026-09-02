@@ -1,6 +1,6 @@
-# Pixel Bug Beta
+# Pixel Bug
 
-Pixel Bug Beta is a desktop pixel-art, animation, voxel, print, and small-game editor built with Electron.
+Pixel Bug is a desktop pixel-art, animation, voxel, print, and small-game editor built with Electron.
 
 ---
 [![Pixel Bug Beta Demo](https://img.youtube.com/vi/qi2VMMoDybs/maxresdefault.jpg)](https://youtu.be/qi2VMMoDybs)
