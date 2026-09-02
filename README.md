@@ -72,6 +72,8 @@ Pixel Bug is a desktop pixel-art, animation, voxel, print, and small-game editor
 - Export Preview PNG, Transparent PNG, Spin GIF, Animation GIF, Animation Sheet, GLB, Blender Script, VOX, OBJ, STL, Voxel JSON, and Animation JSON
 - Blender Script export supports the rigged voxel armature workflow
 
+![Pixel Bug Screenshot](PixelBugScreenshot.jpg)
+
 ### Print Mode
 
 - DPI and inch-based print sizing
