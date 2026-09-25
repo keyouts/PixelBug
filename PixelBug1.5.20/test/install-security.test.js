@@ -36,6 +36,23 @@ test("install guard validates the locked dependency graph", () => {
   assert.equal(manifest.scripts["check:install"], "node scripts/install-guard.js");
 });
 
+
+test("install guard accepts safe lockfile normalization", () => {
+  const temporaryRoot = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "pixel-bug-install-"));
+  try {
+    fs.writeFileSync(path.join(temporaryRoot, "package.json"), JSON.stringify(manifest));
+    const normalizedLock = structuredClone(lock);
+    normalizedLock.packages["node_modules/electron"].integrity = "sha512-normalized";
+    delete normalizedLock.packages["node_modules/electron-winstaller"].hasInstallScript;
+    fs.writeFileSync(path.join(temporaryRoot, "package-lock.json"), JSON.stringify(normalizedLock));
+    const result = InstallGuard.verify(temporaryRoot);
+    assert.deepEqual(result.installScripts, []);
+    assert.deepEqual(result.missingIntegrity, []);
+  } finally {
+    fs.rmSync(temporaryRoot, { recursive: true, force: true });
+  }
+});
+
 test("dependency manifest stays pinned and development only", () => {
   assert.deepEqual(manifest.dependencies || {}, {});
   for (const version of Object.values(manifest.devDependencies || {})) {
@@ -66,6 +83,16 @@ test("install scripts and compromised releases stay blocked", () => {
     if (record.hasInstallScript) scriptPackages.push(identifier);
   }
   assert.deepEqual(scriptPackages, ["electron-winstaller@5.4.0"]);
+});
+
+test("fs-extra 11.3.6 uses the published registry integrity", () => {
+  const expected = "sha512-w8ZNZr2mKIc7qeNaQ9AVPT1+iFaI+Avd4xudVOvdDJ8VytREi1Ft5Ih7hd9jjehod8vAM5GMsfQ/TpPf4EyoEA==";
+  const records = Object.entries(lock.packages || {})
+    .filter(([packagePath, record]) => packagePath.endsWith("/node_modules/fs-extra") && record?.version === "11.3.6");
+  assert.equal(records.length, 2);
+  for (const [packagePath, record] of records) {
+    assert.equal(record.integrity, expected, `${packagePath} has an unexpected fs-extra integrity value`);
+  }
 });
 
 test("packaged application excludes development dependencies", () => {

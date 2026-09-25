@@ -14151,7 +14151,7 @@ function buildVoxelModeJSON() {
     format: "pixelbug-voxel-model",
     type: "pixelbug-voxel-model",
     version: 5,
-    appVersion: "1.5.18",
+    appVersion: "1.5.20",
     sourceId: model.sourceId,
     width: model.width,
     height: model.height,
@@ -16107,7 +16107,7 @@ async function exportSheet() {
   if (sheetJsonInput?.checked) {
     const atlas = {
       frames: atlasFrames,
-      meta: { app: "Pixel Bug", version: "1.5.18", image: `${baseName}.png`, format: "RGBA8888", size: { w: sheet.width, h: sheet.height }, scale, clip: { name: clip.name, start: clip.start, end: clip.end, loop: clip.loop } }
+      meta: { app: "Pixel Bug", version: "1.5.20", image: `${baseName}.png`, format: "RGBA8888", size: { w: sheet.width, h: sheet.height }, scale, clip: { name: clip.name, start: clip.start, end: clip.end, loop: clip.loop } }
     };
     const result = await window.pixelBug.saveFile({ title: "Export Spritesheet Atlas", defaultPath: `${baseName}.json`, filters: [{ name: "JSON Atlas", extensions: ["json"] }], data: JSON.stringify(atlas, null, 2) });
     setStatus(result.ok ? "Spritesheet and atlas exported." : "Spritesheet exported. Atlas save cancelled.");

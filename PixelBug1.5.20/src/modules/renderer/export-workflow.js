@@ -211,7 +211,7 @@
         };
       });
       const baseName = WorkflowFeatures.safeFilename(profile.baseName || `pixel-bug-${clip.name || "sheet"}`);
-      const meta = { app: "Pixel Bug", version: "1.5.18", image: `${baseName}-sheet.png`, format: "RGBA8888", size: { w: sheet.width, h: sheet.height }, scale, clip: { name: clip.name, start: clip.start, end: clip.end, loop: clip.loop } };
+      const meta = { app: "Pixel Bug", version: "1.5.20", image: `${baseName}-sheet.png`, format: "RGBA8888", size: { w: sheet.width, h: sheet.height }, scale, clip: { name: clip.name, start: clip.start, end: clip.end, loop: clip.loop } };
       const atlas = profile.atlasFormat === "aseprite" ? WorkflowFeatures.asepriteAtlas(atlasFrames, meta) : { frames: atlasFrames, meta };
       return { sheet, atlas, baseName };
     }

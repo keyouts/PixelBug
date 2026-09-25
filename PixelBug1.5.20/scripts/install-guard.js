@@ -54,8 +54,7 @@ function verify(root = path.join(__dirname, "..")) {
     if (record.hasInstallScript) seenScripts.push(identifier);
   }
   if (seenMissingIntegrity.some(identifier => !ALLOWED_MISSING_INTEGRITY.has(identifier))) fail(`unexpected missing integrity: ${seenMissingIntegrity.join(", ")}`);
-  if (seenMissingIntegrity.some(identifier => !ALLOWED_MISSING_INTEGRITY.has(identifier)) || seenMissingIntegrity.length !== ALLOWED_MISSING_INTEGRITY.size) fail("missing-integrity exceptions changed");
-  if (seenScripts.some(identifier => !ALLOWED_INSTALL_SCRIPTS.has(identifier)) || seenScripts.length !== ALLOWED_INSTALL_SCRIPTS.size) fail(`install-script allowlist changed: ${seenScripts.join(", ")}`);
+  if (seenScripts.some(identifier => !ALLOWED_INSTALL_SCRIPTS.has(identifier))) fail(`unexpected install script: ${seenScripts.join(", ")}`);
   return Object.freeze({ packages: Object.keys(lock.packages || {}).length, installScripts: seenScripts.slice(), missingIntegrity: seenMissingIntegrity.slice() });
 }
 

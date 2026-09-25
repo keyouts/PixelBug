@@ -1,6 +1,6 @@
 {
   "name": "pixel-bug",
-  "version": "1.5.18",
+  "version": "1.5.20",
   "description": "Pixel art and sprite editor",
   "main": "src/main.js",
   "scripts": {
@@ -26,6 +26,9 @@
   ],
   "author": "KeyOuts",
   "license": "GPL-3.0-or-later",
+  "engines": {
+    "node": ">=22.12.0"
+  },
   "devDependencies": {
     "electron": "42.9.1",
     "electron-builder": "26.15.7"
