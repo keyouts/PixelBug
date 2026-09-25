@@ -95,6 +95,23 @@ test("fs-extra 11.3.6 uses the published registry integrity", () => {
   }
 });
 
+test("windows release build is an installable NSIS package with application shortcut", () => {
+  assert.equal(manifest.scripts.build, "electron-builder --win nsis");
+  assert.equal(manifest.scripts.dist, "electron-builder --win nsis");
+  assert.equal(manifest.build.win.target, "nsis");
+  assert.equal(manifest.build.win.icon, "assets/icon.ico");
+  assert.equal(manifest.build.win.artifactName, "Pixel-Bug-Setup-${version}.${ext}");
+  assert.equal(manifest.build.nsis.createDesktopShortcut, "always");
+  assert.equal(manifest.build.nsis.createStartMenuShortcut, true);
+  assert.equal(manifest.build.nsis.shortcutName, "Pixel Bug");
+  assert.equal(manifest.build.nsis.oneClick, true);
+  assert.equal(manifest.build.nsis.runAfterFinish, true);
+  assert.equal(manifest.build.nsis.installerIcon, "icon.ico");
+  assert.equal(manifest.build.nsis.uninstallerIcon, "icon.ico");
+  assert.equal(manifest.build.nsis.installerHeaderIcon, "icon.ico");
+  assert.equal(fs.existsSync(path.join(root, "assets", "icon.ico")), true);
+});
+
 test("packaged application excludes development dependencies", () => {
   assert.equal(manifest.build.asar, true);
   assert.deepEqual(manifest.build.files, ["src/**/*", "assets/**/*", "package.json", "integrations/**/*"]);

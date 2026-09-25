@@ -1,6 +1,6 @@
 {
   "name": "pixel-bug",
-  "version": "1.5.20",
+  "version": "1.5.21",
   "description": "Pixel art and sprite editor",
   "main": "src/main.js",
   "scripts": {
@@ -8,15 +8,16 @@
     "check:install": "node scripts/install-guard.js",
     "start": "electron .",
     "dev": "electron .",
-    "build": "electron-builder",
-    "dist": "electron-builder",
+    "build": "electron-builder --win nsis",
+    "dist": "electron-builder --win nsis",
     "test": "node --test test/*.test.js",
     "test:smoke": "electron test/electron-smoke.js",
     "test:e2e": "electron test/electron-smoke.js",
     "test:ci": "node --test test/*.test.js && electron test/electron-smoke.js",
     "test:security": "node --test test/security.test.js test/install-security.test.js test/hardening.test.js",
     "audit:dependencies": "npm audit --package-lock-only --audit-level=low",
-    "check:source": "node scripts/source-check.js"
+    "check:source": "node scripts/source-check.js",
+    "build:platform": "electron-builder"
   },
   "keywords": [
     "electron",
@@ -59,7 +60,8 @@
     ],
     "win": {
       "icon": "assets/icon.ico",
-      "target": "nsis"
+      "target": "nsis",
+      "artifactName": "Pixel-Bug-Setup-${version}.${ext}"
     },
     "mac": {
       "icon": "assets/icon.png",
@@ -70,9 +72,14 @@
       "target": "AppImage"
     },
     "nsis": {
-      "createDesktopShortcut": true,
+      "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
-      "shortcutName": "Pixel Bug"
+      "shortcutName": "Pixel Bug",
+      "oneClick": true,
+      "runAfterFinish": true,
+      "installerIcon": "icon.ico",
+      "uninstallerIcon": "icon.ico",
+      "installerHeaderIcon": "icon.ico"
     },
     "asar": true,
     "electronFuses": {
