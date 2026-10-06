@@ -17,7 +17,7 @@ const BLOCKED_RELEASES = new Set([
   "@cacheable/net@2.1.1"
 ]);
 const ALLOWED_INSTALL_SCRIPTS = new Set(["electron-winstaller@5.4.0"]);
-const ALLOWED_MISSING_INTEGRITY = new Set(["electron@42.9.1"]);
+const ALLOWED_MISSING_INTEGRITY = new Set();
 const REQUIRED_OVERRIDES = Object.freeze({ "@xmldom/xmldom": "0.8.15" });
 
 function packageName(packagePath) {

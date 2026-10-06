@@ -1,6 +1,6 @@
 {
   "name": "pixel-bug",
-  "version": "1.5.21",
+  "version": "1.5.22",
   "description": "Pixel art and sprite editor",
   "main": "src/main.js",
   "scripts": {
@@ -31,7 +31,7 @@
     "node": ">=22.12.0"
   },
   "devDependencies": {
-    "electron": "42.9.1",
+    "electron": "42.11.11",
     "electron-builder": "26.15.7"
   },
   "productName": "Pixel Bug",

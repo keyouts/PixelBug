@@ -86,11 +86,11 @@ test("close recovery and runtime isolation stay connected", () => {
 test("release and privacy constraints remain explicit", () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   const lock = JSON.parse(fs.readFileSync(path.join(root, "package-lock.json"), "utf8"));
-  assert.equal(manifest.version, "1.5.21");
-  assert.equal(lock.version, "1.5.21");
-  assert.equal(lock.packages[""].version, "1.5.21");
-  assert.equal(manifest.devDependencies.electron, "42.9.1");
-  assert.equal(lock.packages["node_modules/electron"].version, "42.9.1");
+  assert.equal(manifest.version, "1.5.22");
+  assert.equal(lock.version, "1.5.22");
+  assert.equal(lock.packages[""].version, "1.5.22");
+  assert.equal(manifest.devDependencies.electron, "42.11.11");
+  assert.equal(lock.packages["node_modules/electron"].version, "42.11.11");
   assert.equal(manifest.build.extraResources.some(entry => entry.to === "LICENSE"), true);
   assert.equal(manifest.build.extraResources.some(entry => entry.to === "PRIVACY_POLICY.md"), true);
 });

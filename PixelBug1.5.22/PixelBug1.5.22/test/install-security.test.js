@@ -31,7 +31,7 @@ function packageName(packagePath) {
 test("install guard validates the locked dependency graph", () => {
   const result = InstallGuard.verify(root);
   assert.deepEqual(result.installScripts, ["electron-winstaller@5.4.0"]);
-  assert.deepEqual(result.missingIntegrity, ["electron@42.9.1"]);
+  assert.deepEqual(result.missingIntegrity, []);
   assert.equal(manifest.scripts.preinstall, "node scripts/install-guard.js");
   assert.equal(manifest.scripts["check:install"], "node scripts/install-guard.js");
 });
@@ -71,7 +71,7 @@ test("lockfile uses trusted registry artifacts", () => {
     assert.match(record.resolved || "", /^https:\/\/registry\.npmjs\.org\//);
     if (!record.integrity) missingIntegrity.push(`${packageName(packagePath)}@${record.version}`);
   }
-  assert.deepEqual(missingIntegrity, ["electron@42.9.1"]);
+  assert.deepEqual(missingIntegrity, []);
 });
 
 test("install scripts and compromised releases stay blocked", () => {
