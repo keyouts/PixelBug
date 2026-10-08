@@ -3,11 +3,13 @@
 // Module bridge
 (function attachTinyGameExport(root, factory) {
   const runtimeCore = typeof module === "object" && module.exports ? require("./play-runtime-core.js") : root?.PixelBugPlayRuntimeCore;
-  const api = factory(runtimeCore);
+  const ruleRuntime = typeof module === "object" && module.exports ? require("./play-rule-runtime.js") : root?.PixelBugPlayRuleRuntime;
+  const api = factory(runtimeCore, ruleRuntime);
   if (typeof module === "object" && module.exports) module.exports = api;
   if (root) root.PixelBugTinyGameExport = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function createTinyGameExport(runtimeCore) {
+})(typeof globalThis !== "undefined" ? globalThis : this, function createTinyGameExport(runtimeCore, ruleRuntime) {
   if (!runtimeCore?.standaloneSource) throw new Error("Play runtime core is unavailable.");
+  if (!ruleRuntime?.standaloneSource) throw new Error("Play rule runtime is unavailable.");
   function escapeHtml(value) {
     return String(value).replace(/[&<>"]/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;" })[character]);
   }
@@ -49,6 +51,7 @@ kbd { background:var(--accent); color:#111; border:2px solid var(--edge); paddin
 </main>
 <script>
 const CORE = ${runtimeCore.standaloneSource};
+const RULES = ${ruleRuntime.standaloneSource};
 const GAME = ${payloadJson};
 const canvas = document.getElementById("game");
 const gameStatus = document.getElementById("game-status");
@@ -95,7 +98,7 @@ let gamepadInteractPressed = false;
 let gameFinished = false;
 let nodeEntered = new Set();
 const nodeGraph = rootPlayMode.nodeEditor && Array.isArray(rootPlayMode.nodeEditor.nodes) ? rootPlayMode.nodeEditor : { nodes: [] };
-const nodeVariables = { ...(rootPlayMode.variables || {}) };
+let nodeVariables = { ...(rootPlayMode.variables || {}) };
 let nodeInventory = [...new Set((rootPlayMode.inventory || []).map(item => String(item || "").trim()).filter(Boolean))].slice(0, 64);
 function propOpen(prop) {
   const variable = String(prop && prop.openVariable || "");
@@ -462,14 +465,6 @@ function setNodeCheckpoint() { nodeCheckpoint = { sceneId:currentSceneId, x:acto
 function resetActorToCheckpoint() { const cp = nodeCheckpoint; if (cp?.sceneId && cp.sceneId !== currentSceneId) loadRuntimeScene(cp.sceneId, false); const ar = actorRect(); dialogueContinuation = null; dialogueActive = false; activeCharacterId = ""; actor.x = cp && Number.isFinite(Number(cp.x)) ? Number(cp.x) : 24; actor.y = cp && Number.isFinite(Number(cp.y)) ? Number(cp.y) : groundY() - ar.h; actor.vx = 0; actor.vy = 0; actor.grounded = true; gameFinished = false; lastFrameTime = 0; clampActor(); cameraX = cp ? Math.max(0, Math.min(worldWidth() - canvas.width, actor.x - Math.round(canvas.width * .3))) : 0; if (gameStatus) gameStatus.textContent = "Returned to checkpoint."; }
 // Node runtime
 function nodeById(id) { return (nodeGraph.nodes || []).find(node => String(node.id) === String(id)); }
-function compareNodeNumbers(left, operator, right) {
-  if (operator === "=") return left === right;
-  if (operator === "!=") return left !== right;
-  if (operator === "<") return left < right;
-  if (operator === "<=") return left <= right;
-  if (operator === ">") return left > right;
-  return left >= right;
-}
 function allowSceneRuleTransition() {
   const now = performance.now();
   sceneRuleTransitionTimes = sceneRuleTransitionTimes.filter(time => now - time < 1000);
@@ -481,55 +476,31 @@ function executeNode(id, seen) {
   const node = nodeById(id);
   if (!node || seen.has(String(id)) || seen.size > 40) return;
   seen.add(String(id));
-  const data = node.data || {};
-  let nextId = node.next || "";
-  let nextDelay = 0;
-  if (node.type === "actionMessage") { showNodeMessage(Number(data.textLine) >= 0 ? textLineMessage(data.textLine) || data.message || node.name : data.message || node.name || "Message"); if (nextId) nextDelay = 1100; }
-  if (node.type === "actionDialogue") { const dialogueNext = nextId; nextId = ""; startDialogueAtLine(data.line, dialogueNext ? () => executeNode(dialogueNext, seen) : null); }
-  if (node.type === "actionCheckpoint") setNodeCheckpoint();
-  if (node.type === "actionMoveActor") moveActorBy(data.dx, data.dy);
-  if (node.type === "actionFinish") { showNodeMessage(data.message || "Finished."); gameFinished = true; actor.vx = 0; actor.vy = 0; nextId = ""; }
-  if (node.type === "actionAddItem") {
-    const item = String(data.item || "").trim().slice(0, 40);
-    if (item && !nodeInventory.includes(item)) nodeInventory.push(item);
-  }
-  if (node.type === "actionRemoveItem") {
-    const item = String(data.item || "").trim();
-    nodeInventory = nodeInventory.filter(entry => entry !== item);
-  }
-  if (node.type === "actionScene") {
-    nextId = "";
-    if (data.sceneId && allowSceneRuleTransition()) loadRuntimeScene(data.sceneId, true);
-    else if (data.sceneId) showNodeMessage("Scene transition loop stopped.", 2200);
-  }
-  if (node.type === "actionPlaySound") playRuntimeAudio(data.audioAssetId, data.audioVolume, data.audioLoop);
-  if (node.type === "actionStopSound") stopRuntimeAudio(["all", "music", "sfx"].includes(data.audioStopScope) ? data.audioStopScope : "all");
-  if (node.type === "actionSetVariable") nodeVariables[data.variable || "flag"] = String(data.value ?? "true");
-  if (node.type === "actionChangeNumber") {
-    const key = data.variable || "score";
-    nodeVariables[key] = String((Number(nodeVariables[key]) || 0) + (Number(data.amount) || 0));
-  }
-  if (node.type === "logicVariable") nextId = String(nodeVariables[data.variable || "flag"] ?? "") === String(data.equals ?? "true") ? node.next : node.alt;
-  if (node.type === "logicHasItem") nextId = nodeInventory.includes(String(data.item || "").trim()) ? node.next : node.alt;
-  if (node.type === "logicCompareNumber") {
-    const current = Number(nodeVariables[data.variable || "score"]) || 0;
-    nextId = compareNodeNumbers(current, data.operator || ">=", Number(data.compare) || 0) ? node.next : node.alt;
-  }
-  if (nextId) window.setTimeout(() => executeNode(nextId, seen), nextDelay);
+  const result = RULES.evaluateNode(node, { variables:nodeVariables, inventory:nodeInventory });
+  if (!result) return;
+  nodeVariables = result.state.variables;
+  nodeInventory = result.state.inventory;
+  let dialogueStarted = false;
+  result.effects.forEach(effect => {
+    if (effect.type === "message") showNodeMessage(Number(effect.textLine) >= 0 ? textLineMessage(effect.textLine) || effect.message || node.name : effect.message || node.name || "Message");
+    if (effect.type === "dialogue") {
+      dialogueStarted = true;
+      startDialogueAtLine(effect.line, effect.continuationId ? () => executeNode(effect.continuationId, seen) : null);
+    }
+    if (effect.type === "checkpoint") setNodeCheckpoint();
+    if (effect.type === "moveActor") moveActorBy(effect.dx, effect.dy);
+    if (effect.type === "finish") { showNodeMessage(effect.message || "Finished."); gameFinished = true; actor.vx = 0; actor.vy = 0; }
+    if (effect.type === "scene") {
+      if (effect.sceneId && allowSceneRuleTransition()) loadRuntimeScene(effect.sceneId, true);
+      else if (effect.sceneId) showNodeMessage("Scene transition loop stopped.", 2200);
+    }
+    if (effect.type === "playSound") playRuntimeAudio(effect.assetId, effect.volume, effect.loop);
+    if (effect.type === "stopSound") stopRuntimeAudio(effect.scope);
+  });
+  if (!dialogueStarted && result.nextId) window.setTimeout(() => executeNode(result.nextId, seen), result.delayMs);
 }
 function runNodeEvent(type, payload) {
-  (nodeGraph.nodes || []).filter(node => {
-    if (type === "sceneStart") return node.type === "eventStart" && (!(node.data || {}).sceneId || String((node.data || {}).sceneId) === String(payload.sceneId || ""));
-    if (type === "triggerEnter") {
-      const choices = new Set(["any", payload.name, payload.id].concat(Array.isArray(payload.ids) ? payload.ids : []).map(item => String(item || "")));
-      return node.type === "eventTrigger" && (!(node.data || {}).sceneId || String((node.data || {}).sceneId) === String(currentSceneId || "")) && choices.has(String((node.data || {}).trigger || "any"));
-    }
-    if (type === "characterInteract") {
-      const choices = new Set(["any", payload.name, payload.id].map(item => String(item || "")));
-      return node.type === "eventInteract" && (!(node.data || {}).sceneId || String((node.data || {}).sceneId) === String(currentSceneId || "")) && choices.has(String((node.data || {}).character || "any"));
-    }
-    return false;
-  }).forEach(node => executeNode(node.next || "", new Set([String(node.id)])));
+  (nodeGraph.nodes || []).filter(node => RULES.eventMatches(node, type, payload, currentSceneId)).forEach(node => executeNode(node.next || "", new Set([String(node.id)])));
 }
 function syncNodeTriggers() {
   const actorTouch = expandedRect(actorRect(), 8);
@@ -601,12 +572,7 @@ function drawSceneCharacters() {
 function runCharacterInteraction() {
   const character = activeInteractionCharacter();
   if (!character) return;
-  const matching = (nodeGraph.nodes || []).filter(node => {
-    if (node.type !== "eventInteract") return false;
-    if ((node.data || {}).sceneId && String((node.data || {}).sceneId) !== String(currentSceneId || "")) return false;
-    const target = String((node.data || {}).character || "any");
-    return target === "any" || target === String(character.id) || target === String(character.name);
-  });
+  const matching = (nodeGraph.nodes || []).filter(node => RULES.eventMatches(node, "characterInteract", { id: character.id, name: character.name }, currentSceneId));
   if (matching.length) {
     matching.forEach(node => executeNode(node.next || "", new Set([String(node.id)])));
     return;

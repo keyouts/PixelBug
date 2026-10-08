@@ -236,6 +236,7 @@ const voxelModeResizeBtn = $("#voxel-mode-resize-btn");
 const voxelModeClearBtn = $("#voxel-mode-clear-btn");
 const voxelModeCleanBtn = $("#voxel-mode-clean-btn");
 const voxelModeSelectionInfo = $("#voxel-mode-selection-info");
+const voxelModeSelectionFacts = $("#voxel-mode-selection-facts");
 const voxelModeRigInfo = $("#voxel-mode-rig-info");
 const voxelModePartList = $("#voxel-mode-part-list");
 const voxelModePartNameInput = $("#voxel-mode-part-name");
@@ -403,6 +404,8 @@ const voxelModeNoiseAmountInput = $("#voxel-mode-noise-amount");
 const voxelModeNoiseBtn = $("#voxel-mode-noise-btn");
 const voxelModeHollowThicknessInput = $("#voxel-mode-hollow-thickness");
 const voxelModeHollowBtn = $("#voxel-mode-hollow-btn");
+const voxelModeModifierPreviewInfo = $("#voxel-mode-modifier-preview-info");
+const voxelToolWorkspaceOverlay = $("#voxel-tool-workspace-overlay");
 const voxelModeFrameToSliceBtn = $("#voxel-mode-frame-to-slice-btn");
 const voxelModeSliceToFrameBtn = $("#voxel-mode-slice-to-frame-btn");
 const voxelModeInfo = $("#voxel-mode-info");
@@ -490,6 +493,8 @@ const VOXEL_MODE_DRAFT_CUBE_LIMIT = 50000;
 const VOXEL_MODE_SNAPSHOT_CUBE_LIMIT = 20000;
 const VOXEL_MODE_FULL_PREVIEW_FACE_LIMIT = 12000;
 const VOXEL_MODE_DRAFT_DOT_LIMIT = 16000;
+const VOXEL_MODE_MODIFIER_PREVIEW_SOURCE_LIMIT = 8000;
+const VOXEL_MODE_MODIFIER_PREVIEW_DRAW_LIMIT = 1400;
 const VOXEL_MODE_IMPORT_CUBE_BUDGET = 48000;
 
 const DEFAULT_INTERFACE_COLORS = {
@@ -1311,6 +1316,7 @@ let voxelModeSelectionBox = null;
 let voxelModeSelectionDrag = null;
 let voxelModeSelectionClipboard = null;
 let voxelModeSelectionKeys = null;
+let voxelModeNoisePreviewSeed = 1, voxelModeModifierPreviewPlan = null;
 let voxelModePoseClipboard = null;
 let voxelModeShapeDrag = null;
 let voxelModeAnimationPlaying = false;
@@ -8063,7 +8069,7 @@ function markVoxelModeChunkDirty(x, y, z) {
   voxelModeNeighborCoords(x, y, z).forEach(item => voxelModeDraftDirtyKeys.add(voxelModeKey(item[0], item[1], item[2])));
   markVoxelModeSliceCellDirty(x, y, z);
   voxelModeSurfaceFacesCache = null;
-  voxelModePreviewDirty = true;
+  voxelModePreviewDirty = true; voxelModeModifierPreviewPlan = null;
 }
 function indexVoxelModeCube(cube, remove = false) {
   if (!voxelModeChunkIndex) rebuildVoxelModeChunkIndex();
@@ -8118,7 +8124,7 @@ function invalidateVoxelModePreviewBlocks() {
   voxelModeDraftDirtyKeys.clear();
   voxelModeSliceDirtyCells.clear();
   voxelModeSliceRenderState = null;
-  voxelModePreviewDirty = true;
+  voxelModePreviewDirty = true; voxelModeModifierPreviewPlan = null;
 }
 function clearVoxelModePreviewSchedule() {
   if (voxelModeStaticPreviewFrame) cancelAnimationFrame(voxelModeStaticPreviewFrame);
@@ -8535,9 +8541,22 @@ function voxelModeSelectionText() {
   const kind = voxelModeSelectionKeys ? "custom selection" : "box";
   return `${dims.width} × ${dims.height} × ${dims.depth} ${kind}, ${count} selected cube${count === 1 ? "" : "s"}.`;
 }
+function voxelModeSelectionFactsText(selectionCount = voxelModeSelectionCount()) {
+  const map = voxelModeMap(); const hasSelection = selectionCount > 0; const count = hasSelection ? selectionCount : map.size; const subject = hasSelection ? "Selection" : "Model";
+  if (!count) return hasSelection ? "Selection contains no painted voxels." : "Model is empty.";
+  if (count > 20000 || (!voxelModeSelectionKeys && map.size > 100000)) {
+    const dims = hasSelection ? voxelModeSelectionDimensions() : { width: voxelModel().width, height: voxelModel().height, depth: voxelModel().depth };
+    return `${subject}: ${count} voxels • ${hasSelection ? "Selection box" : "Canvas"} ${dims.width}×${dims.height}×${dims.depth} • Detailed connectivity facts hidden for this large ${subject.toLowerCase()} to keep editing responsive.`;
+  }
+  const cubes = hasSelection ? (voxelModeSelectionKeys ? [...voxelModeSelectionKeys].map(key => map.get(key)).filter(Boolean) : voxelModeSelectedCubes()) : [...map.values()];
+  const facts = VoxelFeatures?.facts?.(cubes); if (!facts?.bounds) return `${subject}: ${count} voxels.`; const b = facts.bounds; const center = facts.center || { x: 0, y: 0, z: 0 };
+  const formatCoord = value => Number.isInteger(value) ? String(value) : Number(value).toFixed(1);
+  return `${subject}: ${facts.count} voxel${facts.count === 1 ? "" : "s"} • Bounds ${facts.width}×${facts.height}×${facts.depth} • X ${b.minX}–${b.maxX}, Y ${b.minY}–${b.maxY}, Z ${b.minZ}–${b.maxZ} • ${facts.componentCount} connected region${facts.componentCount === 1 ? "" : "s"} • ${facts.surfaceCount} surface, ${facts.interiorCount} interior • Bounds center (${formatCoord(center.x)}, ${formatCoord(center.y)}, ${formatCoord(center.z)})`;
+}
 function updateVoxelModeSelectionControls() {
   if (voxelModeSelectionInfo) voxelModeSelectionInfo.textContent = voxelModeSelectionText();
   const selectionCount = voxelModeSelectionCount();
+  if (voxelModeSelectionFacts) voxelModeSelectionFacts.textContent = voxelModeSelectionFactsText(selectionCount);
   const hasSelection = selectionCount > 0;
   const hasClipboard = Boolean(voxelModeSelectionClipboard?.cubes?.length);
   [voxelModeCopySelectionBtn, voxelModeDuplicateSelectionBtn, voxelModeDeleteSelectionBtn, voxelModeRecolorSelectionBtn, voxelModeClearSelectionBtn, voxelModeSelectConnectedBtn, voxelModeNudgeColNegBtn, voxelModeNudgeColPosBtn, voxelModeNudgeRowNegBtn, voxelModeNudgeRowPosBtn, voxelModeNudgeSliceNegBtn, voxelModeNudgeSlicePosBtn, voxelModeFlipXBtn, voxelModeFlipYBtn, voxelModeFlipZBtn, voxelModeRotateSelectionBtn, voxelModeScaleUpBtn, voxelModeScaleDownBtn, voxelModeTransformApplyBtn, voxelModeMirrorCopyXBtn, voxelModeMirrorCopyYBtn, voxelModeMirrorCopyZBtn, voxelModeSaveStampBtn].forEach(button => { if (button) button.disabled = !hasSelection; });
@@ -8546,6 +8565,7 @@ function updateVoxelModeSelectionControls() {
   if (voxelModePasteSelectionBtn) voxelModePasteSelectionBtn.disabled = !hasClipboard;
   if (voxelModePasteStampBtn) voxelModePasteStampBtn.disabled = !selectedVoxelModeStamp();
   if (voxelModeDeleteStampBtn) voxelModeDeleteStampBtn.disabled = !selectedVoxelModeStamp();
+  updateVoxelModeModifierPreviewInfo();
   renderVoxelModePartControls();
 }
 // Part controls
@@ -8591,6 +8611,7 @@ function activateVoxelModeTab(group, target, focus = false) {
     drawVoxelModeSlice();
     drawVoxelModePreview();
   }
+  if (group === "modifier") refreshVoxelModeModifierPreview();
   if (focus) selected.focus();
   scheduleVoxelModeCardLayout();
 }
@@ -11427,6 +11448,74 @@ function voxelModeModifierCubes() {
   const selected = voxelModeSelectedCubes();
   return selected.length ? selected : voxelModeSortedCubes();
 }
+function activeVoxelModeModifierKind() {
+  const tab = document.querySelector('[data-voxel-tab-group="modifier"][aria-selected="true"]');
+  return ["array", "radial", "noise", "hollow"].includes(tab?.dataset?.voxelTabTarget) ? tab.dataset.voxelTabTarget : "array";
+}
+function buildVoxelModeModifierPreview(kind = activeVoxelModeModifierKind(), force = false) {
+  const sourceCount = voxelModeSelectionBox ? voxelModeSelectionCount() : voxelModeMap().size; const model = voxelModel();
+  if (!sourceCount) return VoxelFeatures.modifierPreview(kind, [], [], {});
+  if (!force && sourceCount > VOXEL_MODE_MODIFIER_PREVIEW_SOURCE_LIMIT) return { kind, sourceCount, source: [], added: [], removed: [], moves: [], tooLarge: true, summary: `Preview hidden for ${sourceCount} source voxels to keep the editor responsive. Apply and Undo remain available.` };
+  const source = voxelModeModifierCubes();
+  return VoxelFeatures.modifierPreview(kind, source, voxelModeSortedCubes(), {
+    width: model.width, height: model.height, depth: model.depth,
+    origin: normalizeVoxelOrigin(model.origin, model.width, model.height, model.depth),
+    selectionScoped: Boolean(voxelModeSelectionBox),
+    axis: voxelModeArrayAxisSelect?.value, count: kind === "radial" ? voxelModeRadialCountInput?.value : voxelModeArrayCountInput?.value,
+    spacing: Math.max(1, Math.min(Math.round(Number(voxelModeArraySpacingInput?.value) || 4), MAX_VOXEL_MODE_CANVAS_DIMENSION)),
+    amount: voxelModeNoiseAmountInput?.value, thickness: voxelModeHollowThicknessInput?.value, noiseSeed: voxelModeNoisePreviewSeed
+  });
+}
+function updateVoxelModeModifierPreviewInfo(force = false) {
+  const model = voxelModel(); const cacheKey = `${activeVoxelModeModifierKind()}:${model.width}:${model.height}:${model.depth}:${model.origin?.x}:${model.origin?.y}:${model.origin?.z}`; const cached = voxelModeModifierPreviewPlan;
+  if (force || !cached || cached.box !== voxelModeSelectionBox || cached.keys !== voxelModeSelectionKeys || cached.key !== cacheKey) voxelModeModifierPreviewPlan = { box: voxelModeSelectionBox, keys: voxelModeSelectionKeys, key: cacheKey, plan: buildVoxelModeModifierPreview() };
+  const plan = voxelModeModifierPreviewPlan.plan; if (voxelModeModifierPreviewInfo) voxelModeModifierPreviewInfo.textContent = plan.summary; return plan;
+}
+function refreshVoxelModeModifierPreview() {
+  updateVoxelModeModifierPreviewInfo(true);
+  drawVoxelModePreview();
+}
+function voxelModeModifierPreviewVisible() {
+  const card = voxelModeArrayBtn?.closest?.(".voxel-modifier-card");
+  if (!card || card.hidden) return false;
+  if (voxelToolWorkspaceOverlay && !voxelToolWorkspaceOverlay.hidden) return voxelToolWorkspaceOverlay.dataset.activeWorkspace === "modifiers";
+  return card.getClientRects().length > 0;
+}
+function drawVoxelModeModifierPreview(transform, model, angle, yaw, pitch) {
+  if (!voxelModeModifierPreviewVisible()) return;
+  const plan = updateVoxelModeModifierPreviewInfo();
+  if (plan.tooLarge || (!plan.added.length && !plan.removed.length)) return;
+  const map = voxelModeMap();
+  const unique = (cubes, skipExisting = false) => {
+    const seen = new Set();
+    const result = [];
+    for (const cube of cubes) {
+      const key = voxelModeKey(cube.x, cube.y, cube.z);
+      if (seen.has(key) || (skipExisting && map.has(key))) continue;
+      seen.add(key);
+      result.push(cube);
+      if (result.length >= VOXEL_MODE_MODIFIER_PREVIEW_DRAW_LIMIT) break;
+    }
+    return result;
+  };
+  const additions = unique(plan.added, true);
+  const removals = plan.kind === "hollow" ? [] : unique(plan.removed, false);
+  const faceNames = ["bottom", "back", "right", "front", "left", "top"];
+  const drawGhosts = (cubes, removing) => {
+    const faces = [];
+    cubes.forEach(cube => faceNames.forEach(faceName => {
+      const face = voxelModeCubeFace(cube, faceName, model, angle);
+      if (voxelModeNormalDepth(face.normal, yaw, pitch) > 1e-5) faces.push(face);
+    }));
+    faces.sort((a, b) => a.depth - b.depth);
+    const dark = isDarkTheme();
+    const fill = removing ? (dark ? "rgba(255,110,110,0.22)" : "rgba(210,45,45,0.18)") : (dark ? "rgba(110,235,185,0.22)" : "rgba(20,145,105,0.18)");
+    const stroke = removing ? (dark ? "rgba(255,145,145,0.9)" : "rgba(170,30,30,0.86)") : (dark ? "rgba(145,255,210,0.9)" : "rgba(10,115,82,0.86)");
+    faces.forEach(face => drawVoxelModePoly(voxelModePreviewCtx, face.points, fill, transform, { stroke, lineWidth: Math.max(1, transform.scale * 0.8) }));
+  };
+  drawGhosts(removals, true);
+  drawGhosts(additions, false);
+}
 function applyVoxelModeArrayModifier() {
   const source = voxelModeModifierCubes();
   const model = voxelModel();
@@ -11434,10 +11523,15 @@ function applyVoxelModeArrayModifier() {
   const axis = ["x", "y", "z"].includes(voxelModeArrayAxisSelect?.value) ? voxelModeArrayAxisSelect.value : "x";
   const count = Math.max(2, Math.min(Math.round(Number(voxelModeArrayCountInput?.value) || 2), 12));
   const spacing = Math.max(1, Math.min(Math.round(Number(voxelModeArraySpacingInput?.value) || 4), MAX_VOXEL_MODE_CANVAS_DIMENSION));
+  const preview = source.length <= VOXEL_MODE_MODIFIER_PREVIEW_SOURCE_LIMIT ? buildVoxelModeModifierPreview("array", true) : null;
   beginVoxelModeEditHistory({ snapshot: true });
   let changed = false;
   const added = [];
-  for (let copy = 1; copy < count; copy++) source.forEach(cube => {
+  if (preview) preview.added.forEach(next => {
+    changed = voxelModeSetCube(next.x, next.y, next.z, next.color, next.material, next.partId, next.boneId, next.weights) || changed;
+    added.push(next);
+  });
+  else for (let copy = 1; copy < count; copy++) source.forEach(cube => {
     const next = { ...cube, [axis]: cube[axis] + spacing * copy };
     if (!voxelModeTargetInBounds(next, model)) return;
     changed = voxelModeSetCube(next.x, next.y, next.z, next.color, next.material, next.partId, next.boneId, next.weights) || changed;
@@ -11456,10 +11550,15 @@ function applyVoxelModeRadialModifier() {
   if (!source.length) return setStatus("Paint or select voxels before applying a radial array.");
   const count = Math.max(2, Math.min(Math.round(Number(voxelModeRadialCountInput?.value) || 4), 16));
   const origin = normalizeVoxelOrigin(model.origin, model.width, model.height, model.depth);
+  const preview = source.length <= VOXEL_MODE_MODIFIER_PREVIEW_SOURCE_LIMIT ? buildVoxelModeModifierPreview("radial", true) : null;
   beginVoxelModeEditHistory({ snapshot: true });
   let changed = false;
   const added = [];
-  for (let copy = 1; copy < count; copy++) {
+  if (preview) preview.added.forEach(next => {
+    changed = voxelModeSetCube(next.x, next.y, next.z, next.color, next.material, next.partId, next.boneId, next.weights) || changed;
+    added.push(next);
+  });
+  else for (let copy = 1; copy < count; copy++) {
     const angle = copy / count * Math.PI * 2;
     const cos = Math.cos(angle);
     const sin = Math.sin(angle);
@@ -11484,10 +11583,16 @@ function applyVoxelModeNoiseModifier() {
   const model = voxelModel();
   if (!source.length) return setStatus("Paint or select voxels before applying noise.");
   const amount = Math.max(1, Math.min(Number(voxelModeNoiseAmountInput?.value) || 15, 100)) / 100;
+  const preview = source.length <= VOXEL_MODE_MODIFIER_PREVIEW_SOURCE_LIMIT ? buildVoxelModeModifierPreview("noise", true) : null;
   beginVoxelModeEditHistory({ snapshot: true });
   let changed = false;
   const moved = [];
-  source.forEach(cube => {
+  if (preview) preview.moves.forEach(move => {
+    voxelModeDeleteCube(move.from.x, move.from.y, move.from.z);
+    changed = voxelModeSetCube(move.to.x, move.to.y, move.to.z, move.to.color, move.to.material, move.to.partId, move.to.boneId, move.to.weights) || changed;
+    moved.push(move.to);
+  });
+  else source.forEach(cube => {
     if (Math.random() > amount * 0.45) return;
     const offsets = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
     const offset = offsets[Math.floor(Math.random() * offsets.length)];
@@ -11500,6 +11605,7 @@ function applyVoxelModeNoiseModifier() {
   const recorded = pushVoxelModeDiffHistory();
   syncVoxelModelFromMap();
   if (moved.length && voxelModeSelectionBox) voxelModeSelectionBox = voxelModeBoxFromCubes(voxelModeModifierCubes());
+  voxelModeNoisePreviewSeed = (voxelModeNoisePreviewSeed + 1) >>> 0 || 1;
   renderVoxelMode();
   if (recorded || changed) saveLocal();
   setStatus(`Applied noise and displaced ${moved.length} voxel${moved.length === 1 ? "" : "s"}.`);
@@ -11508,15 +11614,19 @@ function applyVoxelModeHollowModifier() {
   const source = voxelModeModifierCubes();
   if (!source.length) return setStatus("Paint or select voxels before hollowing.");
   const thickness = Math.max(1, Math.min(Math.round(Number(voxelModeHollowThicknessInput?.value) || 1), 8));
-  const sourceKeys = new Set(source.map(cube => voxelModeKey(cube.x, cube.y, cube.z)));
-  const map = voxelModeMap();
-  const removable = source.filter(cube => [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]].every(direction => {
-    for (let step = 1; step <= thickness; step++) {
-      const key = voxelModeKey(cube.x + direction[0] * step, cube.y + direction[1] * step, cube.z + direction[2] * step);
-      if (!map.has(key) || (voxelModeSelectionBox && !sourceKeys.has(key))) return false;
-    }
-    return true;
-  }));
+  let removable;
+  if (source.length <= VOXEL_MODE_MODIFIER_PREVIEW_SOURCE_LIMIT) removable = buildVoxelModeModifierPreview("hollow", true).removed;
+  else {
+    const sourceKeys = new Set(source.map(cube => voxelModeKey(cube.x, cube.y, cube.z)));
+    const map = voxelModeMap();
+    removable = source.filter(cube => [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]].every(direction => {
+      for (let step = 1; step <= thickness; step++) {
+        const key = voxelModeKey(cube.x + direction[0] * step, cube.y + direction[1] * step, cube.z + direction[2] * step);
+        if (!map.has(key) || (voxelModeSelectionBox && !sourceKeys.has(key))) return false;
+      }
+      return true;
+    }));
+  }
   if (!removable.length) return setStatus(`No interior voxels were deeper than the ${thickness}-voxel wall.`);
   beginVoxelModeEditHistory({ snapshot: true });
   removable.forEach(cube => voxelModeDeleteCube(cube.x, cube.y, cube.z));
@@ -12577,6 +12687,7 @@ function drawVoxelModePreview(options = {}) {
       return { ...face, screenPoints };
     });
   }
+  if (!options.animationPreview && !options.exporting) drawVoxelModeModifierPreview(transform, model, angle, yaw, pitch);
   if (!options.animationPreview && !options.exporting) drawVoxelModeAnimationOnionPreview(transform, model, angle, yaw, pitch);
   if (options.hideGuides !== true) {
     drawVoxelModeHover(transform, model, angle);
@@ -14151,7 +14262,7 @@ function buildVoxelModeJSON() {
     format: "pixelbug-voxel-model",
     type: "pixelbug-voxel-model",
     version: 5,
-    appVersion: "1.5.23",
+    appVersion: "1.5.31",
     sourceId: model.sourceId,
     width: model.width,
     height: model.height,
@@ -16107,7 +16218,7 @@ async function exportSheet() {
   if (sheetJsonInput?.checked) {
     const atlas = {
       frames: atlasFrames,
-      meta: { app: "Pixel Bug", version: "1.5.23", image: `${baseName}.png`, format: "RGBA8888", size: { w: sheet.width, h: sheet.height }, scale, clip: { name: clip.name, start: clip.start, end: clip.end, loop: clip.loop } }
+      meta: { app: "Pixel Bug", version: "1.5.31", image: `${baseName}.png`, format: "RGBA8888", size: { w: sheet.width, h: sheet.height }, scale, clip: { name: clip.name, start: clip.start, end: clip.end, loop: clip.loop } }
     };
     const result = await window.pixelBug.saveFile({ title: "Export Spritesheet Atlas", defaultPath: `${baseName}.json`, filters: [{ name: "JSON Atlas", extensions: ["json"] }], data: JSON.stringify(atlas, null, 2) });
     setStatus(result.ok ? "Spritesheet and atlas exported." : "Spritesheet exported. Atlas save cancelled.");
@@ -18129,6 +18240,12 @@ if (voxelModeArrayBtn) voxelModeArrayBtn.onclick = applyVoxelModeArrayModifier;
 if (voxelModeRadialBtn) voxelModeRadialBtn.onclick = applyVoxelModeRadialModifier;
 if (voxelModeNoiseBtn) voxelModeNoiseBtn.onclick = applyVoxelModeNoiseModifier;
 if (voxelModeHollowBtn) voxelModeHollowBtn.onclick = applyVoxelModeHollowModifier;
+[voxelModeArrayAxisSelect, voxelModeArrayCountInput, voxelModeArraySpacingInput, voxelModeRadialCountInput, voxelModeNoiseAmountInput, voxelModeHollowThicknessInput].forEach(input => {
+  if (!input) return;
+  input.addEventListener("input", refreshVoxelModeModifierPreview);
+  input.addEventListener("change", refreshVoxelModeModifierPreview);
+});
+document.addEventListener("pixelbug:voxel-workspace-opened", event => { if (event.detail?.name === "modifiers") refreshVoxelModeModifierPreview(); });
 if (voxelModeFrameToSliceBtn) voxelModeFrameToSliceBtn.onclick = importActiveFrameToVoxelSlice;
 if (voxelModeSliceToFrameBtn) voxelModeSliceToFrameBtn.onclick = exportVoxelSliceToFrame;
 if (voxelModeUndoBtn) voxelModeUndoBtn.onclick = undoVoxelModeEdit;

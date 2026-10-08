@@ -10,6 +10,7 @@ const crypto = require("node:crypto");
 const root = path.join(__dirname, "..");
 const renderer = fs.readFileSync(path.join(root, "src", "renderer.js"), "utf8");
 const playRuntimeCore = fs.readFileSync(path.join(root, "src", "modules", "play-runtime-core.js"), "utf8");
+const playRuleRuntime = fs.readFileSync(path.join(root, "src", "modules", "play-rule-runtime.js"), "utf8");
 const exportRuntime = fs.readFileSync(path.join(root, "src", "modules", "tiny-game-export.js"), "utf8");
 const tinyGameExport = require(path.join(root, "src", "modules", "tiny-game-export.js"));
 const rules = fs.readFileSync(path.join(root, "src", "modules", "node-editor.js"), "utf8");
@@ -74,13 +75,14 @@ test("tiny game builder is isolated without output drift", () => {
   assert.doesNotMatch(renderer, /function escapeScriptJson/);
   const browserContext = {};
   vm.runInNewContext(playRuntimeCore, browserContext);
+  vm.runInNewContext(playRuleRuntime, browserContext);
   vm.runInNewContext(exportRuntime, browserContext);
   assert.equal(typeof browserContext.PixelBugTinyGameExport?.buildTinyGameHtml, "function");
   const first = crypto.createHash("sha256").update(exportBuilder()(samplePayload())).digest("hex");
   const secondPayload = { ...samplePayload(), title: "A < B & \"C\"", exportWidth: 320, exportHeight: 240 };
   const second = crypto.createHash("sha256").update(exportBuilder()(secondPayload)).digest("hex");
-  assert.equal(first, "b2cdde5bd284e1fe210cbe4a5bbc55bc1d41c974a946f181a3eb384a635a7cad");
-  assert.equal(second, "3fd9f6b02385c92f0893f479451388f3c9c1974134db3a23a90a91f788151d57");
+  assert.equal(first, "74eb526704ec703378116a94f5afdaee4ac94e40f618a21b837f0efe4eadea01");
+  assert.equal(second, "41c07f32d84734367c123d054c082f7756f4dae620568bb5c5b2885fc9a107fd");
 });
 
 test("node map makes audio paths visible", () => {
@@ -165,11 +167,10 @@ test("every rule type has an exported runtime path", () => {
   const types = [...typeBlock.matchAll(/^\s{4}([a-zA-Z][a-zA-Z0-9]+):/gm)].map(match => match[1]);
   assert.ok(types.length >= 18);
   types.forEach(type => {
-    if (type === "eventStart") assert.match(exportRuntime, /node\.type === "eventStart"/);
-    else if (type === "eventTrigger") assert.match(exportRuntime, /node\.type === "eventTrigger"/);
-    else if (type === "eventInteract") assert.match(exportRuntime, /node\.type === "eventInteract"/);
-    else assert.match(exportRuntime, new RegExp(`node\\.type === ["']${type}["']`), `${type} is missing from the exported runtime`);
+    assert.match(playRuleRuntime, new RegExp(`node\\.type === ["']${type}["']`), `${type} is missing from the shared rule runtime`);
   });
+  assert.match(exportRuntime, /RULES\.evaluateNode/);
+  assert.match(exportRuntime, /RULES\.eventMatches/);
   assert.match(exportRuntime, /function allowSceneRuleTransition/);
   assert.match(exportRuntime, /effectAudios\.size >= 32/);
   ["loadRuntimeScene", "readGamepad", "resetActorToCheckpoint", "startDialogueAtLine", "stopRuntimeAudio", "playRuntimeAudio"].forEach(name => {

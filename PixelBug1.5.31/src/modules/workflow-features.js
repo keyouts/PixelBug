@@ -375,7 +375,7 @@
       }])),
       meta: {
         app: "Pixel Bug",
-        version: String(meta.version || "1.5.23"),
+        version: String(meta.version || "1.5.31"),
         image: String(meta.image || "spritesheet.png"),
         format: "RGBA8888",
         size: meta.size || { w: 1, h: 1 },

@@ -40,6 +40,119 @@
     }
     return output;
   };
+  const facts = cubes => {
+    const source = Array.isArray(cubes) ? cubes : [];
+    const map = new Map(source.filter(Boolean).map(cube => [key(cube), cube]));
+    const unique = Array.from(map.values());
+    const box = bounds(unique);
+    if (!box) return { count: 0, bounds: null, width: 0, height: 0, depth: 0, componentCount: 0, surfaceCount: 0, interiorCount: 0, center: null };
+    const offsets = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+    const unseen = new Set(map.keys());
+    let componentCount = 0;
+    while (unseen.size) {
+      componentCount += 1;
+      const first = unseen.values().next().value;
+      const queue = [first];
+      unseen.delete(first);
+      while (queue.length) {
+        const currentKey = queue.shift();
+        const cube = map.get(currentKey);
+        if (!cube) continue;
+        offsets.forEach(([dx, dy, dz]) => {
+          const nextKey = `${cube.x + dx},${cube.y + dy},${cube.z + dz}`;
+          if (!unseen.has(nextKey)) return;
+          unseen.delete(nextKey);
+          queue.push(nextKey);
+        });
+      }
+    }
+    let surfaceCount = 0;
+    unique.forEach(cube => {
+      if (offsets.some(([dx, dy, dz]) => !map.has(`${cube.x + dx},${cube.y + dy},${cube.z + dz}`))) surfaceCount += 1;
+    });
+    return {
+      count: unique.length,
+      bounds: box,
+      width: box.maxX - box.minX + 1,
+      height: box.maxY - box.minY + 1,
+      depth: box.maxZ - box.minZ + 1,
+      componentCount,
+      surfaceCount,
+      interiorCount: unique.length - surfaceCount,
+      center: { x: (box.minX + box.maxX) / 2, y: (box.minY + box.maxY) / 2, z: (box.minZ + box.maxZ) / 2 }
+    };
+  };
+  const modifierPreview = (kind, sourceCubes, occupiedCubes, options = {}) => {
+    const source = (Array.isArray(sourceCubes) ? sourceCubes : []).filter(Boolean);
+    const occupied = new Map((Array.isArray(occupiedCubes) ? occupiedCubes : []).filter(Boolean).map(cube => [key(cube), cube]));
+    const width = Math.max(1, Math.round(Number(options.width) || 1));
+    const height = Math.max(1, Math.round(Number(options.height) || 1));
+    const depth = Math.max(1, Math.round(Number(options.depth) || 1));
+    const inBounds = cube => cube.x >= 0 && cube.y >= 0 && cube.z >= 0 && cube.x < width && cube.y < height && cube.z < depth;
+    const added = []; const removed = []; const moves = [];
+    let overlapCount = 0; let outOfBoundsCount = 0;
+    if (!source.length) return { kind, source, added, removed, moves, overlapCount, outOfBoundsCount, summary: "Paint or select voxels to preview this modifier." };
+    if (kind === "array") {
+      const axis = ["x", "y", "z"].includes(options.axis) ? options.axis : "x";
+      const count = Math.max(2, Math.min(Math.round(Number(options.count) || 2), 12));
+      const spacing = Math.max(1, Math.round(Number(options.spacing) || 4));
+      for (let copy = 1; copy < count; copy++) source.forEach(cube => {
+        const next = { ...cube, [axis]: cube[axis] + spacing * copy };
+        if (!inBounds(next)) { outOfBoundsCount++; return; }
+        if (occupied.has(key(next))) overlapCount++;
+        added.push(next);
+      });
+      return { kind, source, added, removed, moves, axis, count, spacing, overlapCount, outOfBoundsCount, summary: `Array preview: ${count} copies on ${axis.toUpperCase()}, ${added.length} planned placements, ${overlapCount} overlap${overlapCount === 1 ? "" : "s"}${outOfBoundsCount ? `, ${outOfBoundsCount} outside the model` : ""}.` };
+    }
+    if (kind === "radial") {
+      const count = Math.max(2, Math.min(Math.round(Number(options.count) || 4), 16));
+      const origin = { x: Number(options.origin?.x) || 0, y: Number(options.origin?.y) || 0, z: Number(options.origin?.z) || 0 };
+      for (let copy = 1; copy < count; copy++) {
+        const angle = copy / count * Math.PI * 2; const cos = Math.cos(angle); const sin = Math.sin(angle);
+        source.forEach(cube => {
+          const dx = cube.x - origin.x; const dz = cube.z - origin.z;
+          const next = { ...cube, x: Math.round(origin.x + dx * cos - dz * sin), z: Math.round(origin.z + dx * sin + dz * cos) };
+          if (!inBounds(next)) { outOfBoundsCount++; return; }
+          if (occupied.has(key(next))) overlapCount++;
+          added.push(next);
+        });
+      }
+      return { kind, source, added, removed, moves, count, origin, overlapCount, outOfBoundsCount, summary: `Radial preview: ${count} copies around origin (${origin.x}, ${origin.y}, ${origin.z}), ${added.length} planned placements, ${overlapCount} overlap${overlapCount === 1 ? "" : "s"}${outOfBoundsCount ? `, ${outOfBoundsCount} outside the model` : ""}.` };
+    }
+    if (kind === "noise") {
+      const amount = Math.max(1, Math.min(Number(options.amount) || 15, 100)) / 100;
+      const seed = (Math.round(Number(options.noiseSeed) || 1) >>> 0) || 1;
+      const unit = (cube, salt) => {
+        let hash = ((Math.round(cube.x) * 73856093) ^ (Math.round(cube.y) * 19349663) ^ (Math.round(cube.z) * 83492791) ^ (seed * 2654435761) ^ (salt * 1597334677)) >>> 0;
+        hash = Math.imul(hash ^ (hash >>> 16), 2246822507) >>> 0; hash = Math.imul(hash ^ (hash >>> 13), 3266489909) >>> 0;
+        return ((hash ^ (hash >>> 16)) >>> 0) / 4294967295;
+      };
+      const offsets = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]];
+      source.forEach(cube => {
+        if (unit(cube, 0) > amount * 0.45) return;
+        const offset = offsets[Math.min(offsets.length - 1, Math.floor(unit(cube, 1) * offsets.length))];
+        const next = { ...cube, x: cube.x + offset[0], y: cube.y + offset[1], z: cube.z + offset[2] };
+        if (!inBounds(next)) { outOfBoundsCount++; return; }
+        if (occupied.has(key(next)) && key(next) !== key(cube)) overlapCount++;
+        moves.push({ from: { ...cube }, to: next }); removed.push({ ...cube }); added.push(next);
+      });
+      return { kind, source, added, removed, moves, amount, overlapCount, outOfBoundsCount, summary: `Noise preview: ${moves.length} voxel${moves.length === 1 ? "" : "s"} will move at ${Math.round(amount * 100)}% amount${overlapCount ? `, with ${overlapCount} destination overlap${overlapCount === 1 ? "" : "s"}` : ""}.` };
+    }
+    const thickness = Math.max(1, Math.min(Math.round(Number(options.thickness) || 1), 8));
+    const sourceKeys = new Set(source.map(key));
+    source.forEach(cube => {
+      const interior = [[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1]].every(direction => {
+        for (let step = 1; step <= thickness; step++) {
+          const targetKey = `${cube.x + direction[0] * step},${cube.y + direction[1] * step},${cube.z + direction[2] * step}`;
+          if (!occupied.has(targetKey) || (options.selectionScoped === true && !sourceKeys.has(targetKey))) return false;
+        }
+        return true;
+      });
+      if (interior) removed.push({ ...cube });
+    });
+    return { kind: "hollow", source, added, removed, moves, thickness, overlapCount, outOfBoundsCount, summary: removed.length ? `Hollow preview: ${removed.length} interior voxel${removed.length === 1 ? "" : "s"} will be removed, leaving a ${thickness}-voxel wall.` : `Hollow preview: no voxels are deeper than the ${thickness}-voxel wall.` };
+  };
+
   const byColor = (cubes, color) => {
     const target = String(color || "").toLowerCase();
     if (!target) return [];
@@ -158,5 +271,5 @@
     return best;
   };
 
-  return { key, bounds, connected, byColor, shell, primitive, mirror, poseLerp, cameraView, previewStep, previewImportInfo, sampleColor };
+  return { key, bounds, connected, facts, modifierPreview, byColor, shell, primitive, mirror, poseLerp, cameraView, previewStep, previewImportInfo, sampleColor };
 });

@@ -1,5 +1,6 @@
 // Node editor
 (() => {
+  const RuleRuntime = window.PixelBugPlayRuleRuntime;
   const TYPES = {
     eventStart: "When Scene Starts",
     eventTrigger: "When Player Touches",
@@ -43,6 +44,26 @@
   const EVENT_TYPES = new Set(["eventStart", "eventTrigger", "eventInteract"]);
   const DECISION_TYPES = new Set(["logicVariable", "logicCompareNumber", "logicHasItem"]);
   const TERMINAL_TYPES = new Set(["actionFinish", "actionScene"]);
+  const MATH_CONCEPTS = {
+    eventStart: ["Event", "A starting condition activates a path through the rule graph."],
+    eventTrigger: ["Event + graph", "Touching the chosen object activates a directed path of rules."],
+    eventInteract: ["Event + graph", "An interaction activates a directed path of rules."],
+    actionSetVariable: ["State / assignment", "A named piece of state is replaced with a new value."],
+    actionChangeNumber: ["Integer state", "A saved number changes by a fixed amount."],
+    logicVariable: ["Predicate", "The comparison is either true or false, choosing Then or Else."],
+    logicCompareNumber: ["Predicate + inequality", "A numerical comparison is either true or false, choosing Then or Else."],
+    logicHasItem: ["Set membership", "The check asks whether an item belongs to the inventory set."],
+    actionAddItem: ["Set insertion", "The item is added to the inventory set if it is not already present."],
+    actionRemoveItem: ["Set removal", "The item is removed from the inventory set."],
+    actionMoveActor: ["Coordinates", "The player's position changes by an ordered pair (x, y)."],
+    actionScene: ["State transition", "The game moves from one scene state to another."],
+    actionFinish: ["Terminal state", "This path reaches an ending state and does not continue."],
+    actionMessage: ["Output", "This rule changes what information is shown to the player."],
+    actionDialogue: ["Sequence", "Dialogue follows an ordered sequence before the rule path continues."],
+    actionCheckpoint: ["Stored state", "The current position is saved so it can be restored later."],
+    actionPlaySound: ["Output", "This rule produces an audio effect without changing the branch decision."],
+    actionStopSound: ["Output", "This rule changes the current audio state without changing the branch decision."]
+  };
 
   function supportsNext(type) {
     return !TERMINAL_TYPES.has(type);
@@ -100,6 +121,8 @@
   let ignorePortClickUntil = 0;
   let keyboardReady = false;
   let overlayOpen = false;
+  let overlayOverviewCollapsed = false;
+  let overlayMapFocus = false;
   let overlayReturnFocus = null;
   let inlineContext = null;
   let overlayContext = null;
@@ -107,7 +130,9 @@
   let activeIds = new Map();
   let activeLinks = new Map();
   let runtimeLog = [];
-  let runtimeState = { currentId: "", currentLabel: "None", lastTrigger: "None", actions: [], nextIds: [], testRoot: "" };
+  let runtimeState = { currentId: "", currentLabel: "None", lastTrigger: "None", actions: [], nextIds: [], testRoot: "", lastTrace: "No rule stepped yet." };
+  let stepQueue = [];
+  let stepRootId = "";
   let highlightedId = "";
   let settlingId = "";
 
@@ -176,7 +201,9 @@
   }
 
   function resetRuntimeState() {
-    runtimeState = { currentId: "", currentLabel: "None", lastTrigger: "None", actions: [], nextIds: [], testRoot: "" };
+    runtimeState = { currentId: "", currentLabel: "None", lastTrigger: "None", actions: [], nextIds: [], testRoot: "", lastTrace: "No rule stepped yet." };
+    stepQueue = [];
+    stepRootId = "";
   }
 
   function syncRuntimeVariables(data) {
@@ -435,6 +462,94 @@
     return ids.map(id => byId.get(id)).filter(Boolean).map(node => `${TYPES[node.type] || "Rule"}: ${node.name || "Untitled"}`);
   }
 
+  function computeGraphFacts(data = graph()) {
+    const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
+    const byId = new Map(nodes.map(node => [node.id, node]));
+    const roots = nodes.filter(node => EVENT_TYPES.has(node.type));
+    const reachable = new Set();
+    const queue = roots.map(node => node.id);
+    while (queue.length) {
+      const id = queue.shift();
+      if (!id || reachable.has(id)) continue;
+      reachable.add(id);
+      nodeTargets(byId.get(id)).forEach(targetId => { if (!reachable.has(targetId)) queue.push(targetId); });
+    }
+
+    let index = 0;
+    const indices = new Map();
+    const low = new Map();
+    const stack = [];
+    const onStack = new Set();
+    let cycleCount = 0;
+    function visit(id) {
+      indices.set(id, index);
+      low.set(id, index);
+      index += 1;
+      stack.push(id);
+      onStack.add(id);
+      nodeTargets(byId.get(id)).forEach(targetId => {
+        if (!byId.has(targetId)) return;
+        if (!indices.has(targetId)) { visit(targetId); low.set(id, Math.min(low.get(id), low.get(targetId))); }
+        else if (onStack.has(targetId)) low.set(id, Math.min(low.get(id), indices.get(targetId)));
+      });
+      if (low.get(id) !== indices.get(id)) return;
+      const component = [];
+      let member = "";
+      do { member = stack.pop(); onStack.delete(member); component.push(member); } while (member !== id && stack.length);
+      if (component.length > 1 || component.some(memberId => nodeTargets(byId.get(memberId)).includes(memberId))) cycleCount += 1;
+    }
+    nodes.forEach(node => { if (!indices.has(node.id)) visit(node.id); });
+    const unreachable = nodes.filter(node => !EVENT_TYPES.has(node.type) && !reachable.has(node.id));
+    return {
+      nodeCount: nodes.length,
+      startCount: roots.length,
+      reachableCount: reachable.size,
+      decisionCount: nodes.filter(node => DECISION_TYPES.has(node.type)).length,
+      cycleCount,
+      unreachableCount: unreachable.length
+    };
+  }
+
+  function renderConceptLens(ctx) {
+    const host = ctx?.conceptLens;
+    if (!host) return;
+    const node = selectedNode();
+    const facts = computeGraphFacts();
+    const concept = MATH_CONCEPTS[node?.type] || ["Directed rule", "This rule is one node in a directed graph of possible game behavior."];
+    const content = host.querySelector("[data-concept-lens-content]");
+    if (!content) return;
+    const stats = document.createElement("div");
+    stats.className = "node-editor-concept-stats";
+    [
+      ["Starts", facts.startCount],
+      ["Reachable", facts.reachableCount],
+      ["Decisions", facts.decisionCount],
+      ["Cycles", facts.cycleCount],
+      ["Unreachable", facts.unreachableCount]
+    ].forEach(([labelText, value]) => {
+      const item = document.createElement("span");
+      const strong = document.createElement("strong");
+      const labelNode = document.createElement("small");
+      strong.textContent = String(value);
+      labelNode.textContent = labelText;
+      item.append(strong, labelNode);
+      stats.appendChild(item);
+    });
+    const reading = document.createElement("div");
+    reading.className = "node-editor-concept-reading";
+    const heading = document.createElement("strong");
+    heading.textContent = node ? `${concept[0]} · ${node.name || TYPES[node.type] || "Rule"}` : concept[0];
+    const explanation = document.createElement("p");
+    explanation.textContent = concept[1];
+    const graphNote = document.createElement("p");
+    graphNote.className = "control-hint";
+    graphNote.textContent = facts.unreachableCount
+      ? `${facts.unreachableCount} rule${facts.unreachableCount === 1 ? " is" : "s are"} outside every start path. Reachability asks whether a directed path exists from a start rule.`
+      : "Every non-start rule is reachable from at least one start path. Reachability asks whether a directed path exists from a start rule.";
+    reading.append(heading, explanation, graphNote);
+    content.replaceChildren(stats, reading);
+  }
+
   function computeGraphIssues(data = graph()) {
     const nodes = data.nodes || [];
     const byId = new Map(nodes.map(node => [node.id, node]));
@@ -571,18 +686,6 @@
     node.setAttribute("aria-label", labelValue);
     node.addEventListener("click", handler);
     return node;
-  }
-
-  function actionGroup(title, controls) {
-    const group = document.createElement("div");
-    group.className = "node-editor-action-group";
-    const heading = document.createElement("strong");
-    heading.textContent = title;
-    const row = document.createElement("div");
-    row.className = "node-editor-action-buttons";
-    row.append(...controls);
-    group.append(heading, row);
-    return group;
   }
 
   function makeSelect(id, labelText, value, nodes, fieldName) {
@@ -976,7 +1079,7 @@
     const variableText = variableEntries.length ? variableEntries.map(([key, value]) => `${key}=${value}`).join(" · ") : "Nothing saved yet";
     const inventory = Array.isArray(data.runtime?.inventory) ? data.runtime.inventory : [];
     const inventoryText = inventory.length ? inventory.slice(0, 6).join(" · ") : "Empty";
-    ctx.runtime.innerHTML = `<div class="node-editor-section-head"><strong>Test Results</strong><span>${escape(playTesterStateLabel())}</span></div><div class="node-editor-activity-grid" aria-live="polite"><div><strong>Current Rule</strong><span>${escape(runtimeState.currentLabel || "None")}</span></div><div><strong>Started By</strong><span>${escape(runtimeState.lastTrigger || "None")}</span></div><div><strong>Up Next</strong><span>${escape(nextLabels.length ? nextLabels.join(" · ") : "Nothing queued")}</span></div><div><strong>Saved Values</strong><span>${escape(variableText)}</span></div><div><strong>Inventory</strong><span>${escape(inventoryText)}</span></div></div><div class="node-editor-log-columns"><div><strong>Rules Run</strong><ul>${actionItems}</ul></div><div><strong>Test Log</strong><ul>${logItems}</ul></div></div><p class="sr-only">This panel updates when a rule starts, another rule runs, inventory changes, a saved value changes, or the next rule is chosen.</p>`;
+    ctx.runtime.innerHTML = `<div class="node-editor-section-head"><strong>Test Results</strong><span>${escape(playTesterStateLabel())}</span></div><div class="node-editor-activity-grid" aria-live="polite"><div><strong>Current Rule</strong><span>${escape(runtimeState.currentLabel || "None")}</span></div><div><strong>Started By</strong><span>${escape(runtimeState.lastTrigger || "None")}</span></div><div><strong>Up Next</strong><span>${escape(nextLabels.length ? nextLabels.join(" · ") : "Nothing queued")}</span></div><div><strong>Saved Values</strong><span>${escape(variableText)}</span></div><div><strong>Inventory</strong><span>${escape(inventoryText)}</span></div><div class="node-editor-last-trace"><strong>Last Step</strong><span>${escape(runtimeState.lastTrace || "No rule stepped yet.")}</span></div></div><div class="node-editor-log-columns"><div><strong>Rules Run</strong><ul>${actionItems}</ul></div><div><strong>Test Log</strong><ul>${logItems}</ul></div></div><p class="sr-only">This panel updates when a rule starts, another rule runs, inventory changes, a saved value changes, or the next rule is chosen.</p>`;
   }
 
 
@@ -1082,7 +1185,9 @@
     if (!ctx?.check) return;
     const issues = computeGraphIssues();
     const rows = issues.slice(0, 8).map((issue, index) => `<li>${issue.id ? `<button type="button" data-node-issue="${escape(issue.id)}">Open</button>` : ""}<span>${escape(issue.text)}</span></li>`).join("");
-    ctx.check.innerHTML = `<div class="node-editor-section-head"><strong>Rule Check</strong><span>${issues.length ? `${issues.length} found` : "All good"}</span></div>${issues.length ? `<ul>${rows}</ul>` : `<p class="node-editor-bind-note">No problems found. Each start rule connects to something the game can run.</p>`}<p class="sr-only">Rule check warnings point out rules that may not run in the tester or exported game.</p>`;
+    ctx.check.innerHTML = `<div class="node-editor-section-head"><strong>Rule Check</strong><span>${issues.length ? `${issues.length} found` : "All good"}</span></div>${issues.length ? `<ul>${rows}</ul>` : `<p class="node-editor-bind-note">No problems found. Each start rule connects to something the game can run.</p>`}<div class="node-editor-check-history" aria-label="Rule edit history"><span>Edit history</span><div><button type="button" data-rule-history="undo">Undo</button><button type="button" data-rule-history="redo">Redo</button></div></div><p class="sr-only">Rule check warnings point out rules that may not run in the tester or exported game. Undo and redo are available at the bottom of Rule Check.</p>`;
+    ctx.check.querySelector('[data-rule-history="undo"]')?.addEventListener("click", () => api.undoPlay?.());
+    ctx.check.querySelector('[data-rule-history="redo"]')?.addEventListener("click", () => api.redoPlay?.());
     ctx.check.querySelectorAll("[data-node-issue]").forEach(button => {
       button.addEventListener("click", () => {
         selectedId = button.dataset.nodeIssue || selectedId;
@@ -1178,7 +1283,7 @@
       const add = lessonNode("actionChangeNumber", "Add One", 360, 300, { variable: "score", amount: 1 });
       const compare = lessonNode("logicCompareNumber", "Reached Three?", 676, 300, { variable: "score", operator: ">=", compare: 3 });
       const finish = lessonNode("actionFinish", "Counting Complete", 992, 240, { message: "Three touches! You win." });
-      const keepGoing = lessonNode("actionMessage", "Keep Counting", 992, 370, { message: "Not three yet. Touch it again." });
+      const keepGoing = lessonNode("actionMessage", "Keep Counting", 992, 370, { message: "Keep going. Move away, then return to the counter." });
       start.next = reset.id;
       reset.next = intro.id;
       trigger.next = add.id;
@@ -1692,6 +1797,48 @@
     if (moved) api.setStatus("Rule moved.");
   }
 
+  function syncOverlayViewState() {
+    const dialog = overlayContext?.root?.querySelector?.(".node-editor-large");
+    if (!dialog) return;
+    dialog.classList.toggle("node-editor-overview-collapsed", overlayOverviewCollapsed);
+    dialog.classList.toggle("node-editor-map-focus", overlayMapFocus);
+    const overviewButton = dialog.querySelector("[data-node-editor-overview-toggle]");
+    if (overviewButton) {
+      overviewButton.textContent = overlayOverviewCollapsed ? "Expand" : "Minimize";
+      overviewButton.setAttribute("aria-expanded", String(!overlayOverviewCollapsed));
+      overviewButton.setAttribute("aria-label", overlayOverviewCollapsed ? "Expand the Game Rules overview" : "Minimize the Game Rules overview");
+    }
+    const focusButton = dialog.querySelector("[data-node-editor-map-focus]");
+    if (focusButton) {
+      focusButton.textContent = overlayMapFocus ? "Exit Focus" : "Focus Map";
+      focusButton.setAttribute("aria-pressed", String(overlayMapFocus));
+      focusButton.setAttribute("aria-label", overlayMapFocus ? "Exit focused rule map view" : "Open a focused rule map view");
+    }
+  }
+
+  function toggleOverlayOverview() {
+    overlayOverviewCollapsed = !overlayOverviewCollapsed;
+    syncOverlayViewState();
+  }
+
+  function toggleMapFocus() {
+    overlayMapFocus = !overlayMapFocus;
+    if (overlayMapFocus && overlayContext?.mapDetails) overlayContext.mapDetails.open = true;
+    syncOverlayViewState();
+    if (overlayMapFocus) {
+      const dialog = overlayContext?.root?.querySelector?.(".node-editor-large");
+      const mapColumn = overlayContext?.root?.querySelector?.(".node-editor-map-column");
+      if (dialog) dialog.scrollTop = 0;
+      if (mapColumn) mapColumn.scrollTop = 0;
+    }
+    window.requestAnimationFrame(() => {
+      if (!overlayOpen) return;
+      drawLinks(overlayContext);
+      const target = overlayMapFocus ? overlayContext?.board : overlayContext?.root?.querySelector?.("[data-node-editor-map-focus]");
+      target?.focus?.({ preventScroll: true });
+    });
+  }
+
   function renderMapTools(ctx) {
     if (!ctx?.mapTools) return;
     ctx.mapTools.innerHTML = "";
@@ -1706,40 +1853,31 @@
     help.id = `${ctx.key}-delete-rule-help`;
     help.className = "sr-only";
     help.textContent = unavailable ? "At least one rule must remain on the map." : "Deletes the selected rule and removes connections to it.";
-    ctx.mapTools.append(addMenu, remove, help);
-  }
-
-  function makeActions(ctx) {
-    if (!ctx?.actions || ctx.actions.dataset.ready) return;
-    ctx.actions.dataset.ready = "true";
-    const historyControls = [
-      button("Undo", "undo the last Play Mode authoring edit", () => api.undoPlay?.()),
-      button("Redo", "redo the last undone Play Mode authoring edit", () => api.redoPlay?.())
-    ];
-    const testControls = [
-      button("Test Rule", "test from the selected rule in the game preview", runSelectedNode),
-      button("Test Scene Start", "run every matching When Scene Starts rule without starting movement", runSceneStart)
-    ];
-    const mapControls = [
-      button("Auto Arrange", "arrange the rule map without changing its rules or connections", wrangleGraph),
-      button("Clear Connections", "clear the Then and Else connections from the selected rule", clearConnection)
-    ];
-    const more = document.createElement("details");
-    more.className = "node-editor-action-more";
-    const summary = document.createElement("summary");
-    summary.textContent = "More";
-    summary.setAttribute("aria-label", "Show more rule tools");
-    const panel = document.createElement("div");
-    panel.className = "node-editor-action-more-panel";
-    panel.append(button("Reset Lessons", "reset the rule map to the first sequence lesson", resetGraph));
-    more.append(summary, panel);
-    ctx.actions.setAttribute("aria-label", "Rule testing and map tools");
-    ctx.actions.append(
-      actionGroup("History", historyControls),
-      actionGroup("Try It", testControls),
-      actionGroup("Organize", mapControls),
-      more
+    const tools = document.createElement("details");
+    tools.className = "node-editor-action-more node-editor-map-more";
+    const toolsSummary = document.createElement("summary");
+    toolsSummary.textContent = "Tools";
+    toolsSummary.setAttribute("aria-label", "Show rule testing and map tools");
+    const toolsPanel = document.createElement("div");
+    toolsPanel.className = "node-editor-action-more-panel node-editor-map-more-panel";
+    const toolButton = (textValue, labelValue, handler) => button(textValue, labelValue, () => { handler(); tools.open = false; });
+    toolsPanel.append(
+      toolButton("Test Rule", "test from the selected rule in the game preview", runSelectedNode),
+      toolButton("Step Rule", "run one rule at a time from the selected rule and show its state change or decision", stepRule),
+      toolButton("Test Scene Start", "run every matching When Scene Starts rule without starting movement", runSceneStart),
+      toolButton("Auto Arrange", "arrange the rule map without changing its rules or connections", wrangleGraph),
+      toolButton("Clear Connections", "clear the Then and Else connections from the selected rule", clearConnection),
+      toolButton("Reset Lessons", "reset the rule map to the first sequence lesson", resetGraph)
     );
+    tools.append(toolsSummary, toolsPanel);
+    ctx.mapTools.append(addMenu, remove, tools, help);
+    if (ctx.key === "large") {
+      const focus = button(overlayMapFocus ? "Exit Focus" : "Focus Map", overlayMapFocus ? "exit the focused rule map view" : "expand the rule map and selected rule editor", toggleMapFocus);
+      focus.dataset.nodeEditorMapFocus = "true";
+      focus.classList.add("node-editor-map-focus-button");
+      focus.setAttribute("aria-pressed", String(overlayMapFocus));
+      ctx.mapTools.append(focus);
+    }
   }
 
   function renderLauncher(ctx) {
@@ -1776,9 +1914,9 @@
     const pendingHere = pendingConnection?.contextKey === ctx.key;
     ctx.board.classList.toggle("connecting", pendingHere);
     if (pendingHere) ctx.board.setAttribute("aria-label", `Connecting ${portTitle(pendingConnection.port, graph().nodes.find(node => node.id === pendingConnection.sourceId)?.type)}. Click another rule or press Escape to cancel.`);
-    makeActions(ctx);
     renderMapTools(ctx);
     renderOutline(ctx);
+    renderConceptLens(ctx);
     renderLessons(ctx);
     renderBindings(ctx);
     renderRuntime(ctx);
@@ -1824,9 +1962,10 @@
       overlay.id = "node-editor-overlay";
       overlay.className = "modal-overlay";
       overlay.hidden = true;
-      overlay.innerHTML = `<div class="modal-card node-editor-large" role="dialog" aria-modal="true" tabindex="-1" aria-labelledby="node-editor-large-title" aria-describedby="node-editor-large-help"><div class="modal-head"><div><span class="play-mode-eyebrow">Play Mode</span><h2 id="node-editor-large-title">Game Rules</h2></div><button type="button" class="node-editor-close" aria-label="Close large rule editor">Close<span class="sr-only"> rule editor</span></button></div><p class="control-hint" id="node-editor-large-help">Create and connect rules. The outline and map show the same rule data.</p><div class="node-editor-outline" aria-label="Plain language rule outline"></div><details class="node-editor-support"><summary>Examples and Connections</summary><div class="node-editor-lessons" aria-label="Game rule examples"></div><div class="node-editor-bindings" aria-label="Scene object touch rules"></div></details><div class="button-row action-row play-actions node-editor-actions"></div><details class="node-editor-map-details"><summary>Visual Rule Map</summary><div class="node-editor-workspace"><div class="node-editor-map-column"><div class="node-editor-map-head"><div class="node-editor-map-copy"><strong>Rule Map</strong><span id="node-editor-large-connect-help">Click Connect, then choose the rule that runs next. Decisions can use both Then and Else. Waveform markers show the exact branches that lead to audio.</span></div><div class="node-editor-map-controls"><div class="node-editor-map-tools" aria-label="Add and delete rules"></div><div class="node-editor-route-key" aria-label="Connection colors. Audio Path overlays a Next or Else branch that eventually reaches Play Sound or Stop Audio."><span class="route-next">Next / Then</span><span class="route-alt">Else</span><span class="route-audio" title="Overlay on a Next or Else branch that leads to Play Sound or Stop Audio">Audio Path</span></div></div></div><div class="node-editor-board node-editor-large-board" role="application" tabindex="0" aria-label="Large visual game rule map" aria-describedby="node-editor-large-help node-editor-large-connect-help"><div class="node-editor-nodes"></div></div></div><div class="node-editor-inspector" aria-label="Large selected game rule editor"></div></div></details><div class="node-editor-feedback-grid"><div class="node-editor-runtime" aria-live="polite"></div><div class="node-editor-check" aria-live="polite"></div></div></div>`;
+      overlay.innerHTML = `<div class="modal-card node-editor-large" role="dialog" aria-modal="true" tabindex="-1" aria-labelledby="node-editor-large-title" aria-describedby="node-editor-large-help"><div class="modal-head node-editor-modal-head"><div><span class="play-mode-eyebrow">Play Mode</span><h2 id="node-editor-large-title">Game Rules</h2></div><div class="node-editor-head-actions"><button type="button" data-node-editor-overview-toggle aria-expanded="true" aria-controls="node-editor-top-section">Minimize</button><button type="button" class="node-editor-close" aria-label="Close large rule editor">Close<span class="sr-only"> rule editor</span></button></div></div><div class="node-editor-top-section" id="node-editor-top-section"><p class="control-hint" id="node-editor-large-help">Create and connect rules. The outline and map show the same rule data.</p><div class="node-editor-outline" aria-label="Plain language rule outline"></div><details class="node-editor-support"><summary>Examples and Connections</summary><div class="node-editor-lessons" aria-label="Game rule examples"></div><div class="node-editor-bindings" aria-label="Scene object touch rules"></div></details></div><details class="node-editor-map-details"><summary>Visual Rule Map</summary><div class="node-editor-workspace"><div class="node-editor-map-column"><div class="node-editor-map-head"><div class="node-editor-map-copy"><strong>Rule Map</strong><span id="node-editor-large-connect-help">Click Connect, then choose the rule that runs next. Decisions can use both Then and Else. Waveform markers show the exact branches that lead to audio.</span></div><div class="node-editor-map-controls"><div class="node-editor-map-tools" aria-label="Add, delete, test, arrange, and focus rules"></div><div class="node-editor-route-key" aria-label="Connection colors. Audio Path overlays a Next or Else branch that eventually reaches Play Sound or Stop Audio."><span class="route-next">Next / Then</span><span class="route-alt">Else</span><span class="route-audio" title="Overlay on a Next or Else branch that leads to Play Sound or Stop Audio">Audio Path</span></div></div></div><details class="node-editor-concept-lens node-editor-map-lens" open><summary>Concept Lens</summary><div data-concept-lens-content aria-live="polite" aria-atomic="true"></div></details><div class="node-editor-board node-editor-large-board" role="application" tabindex="0" aria-label="Large visual game rule map" aria-describedby="node-editor-large-help node-editor-large-connect-help"><div class="node-editor-nodes"></div></div></div><div class="node-editor-inspector" aria-label="Large selected game rule editor"></div></div></details><div class="node-editor-feedback-grid"><div class="node-editor-runtime" aria-live="polite"></div><div class="node-editor-check" aria-live="polite"></div></div></div>`;
       document.body.appendChild(overlay);
       overlay.querySelector(".node-editor-close")?.addEventListener("click", closeOverlay);
+      overlay.querySelector("[data-node-editor-overview-toggle]")?.addEventListener("click", toggleOverlayOverview);
       overlay.addEventListener("click", event => { if (event.target === overlay) closeOverlay(); });
     }
     return {
@@ -1835,12 +1974,12 @@
       board: overlay.querySelector(".node-editor-board"),
       nodeLayer: overlay.querySelector(".node-editor-nodes"),
       inspector: overlay.querySelector(".node-editor-inspector"),
-      actions: overlay.querySelector(".node-editor-actions"),
       runtime: overlay.querySelector(".node-editor-runtime"),
       check: overlay.querySelector(".node-editor-check"),
       bindings: overlay.querySelector(".node-editor-bindings"),
       lessons: overlay.querySelector(".node-editor-lessons"),
       outline: overlay.querySelector(".node-editor-outline"),
+      conceptLens: overlay.querySelector(".node-editor-concept-lens"),
       mapDetails: overlay.querySelector(".node-editor-map-details"),
       mapTools: overlay.querySelector(".node-editor-map-tools")
     };
@@ -1854,149 +1993,159 @@
     overlayContext = buildOverlay();
     overlayOpen = true;
     overlayContext.root.hidden = false;
+    document.getElementById("play-workspace-rules-btn")?.setAttribute("aria-expanded", "true");
+    overlayMapFocus = false;
     if (overlayContext.mapDetails) overlayContext.mapDetails.open = true;
     renderContext(overlayContext);
+    syncOverlayViewState();
     overlayContext.root.querySelector("[role=dialog]")?.focus?.({ preventScroll: true });
   }
 
   function closeOverlay() {
     if (!overlayContext?.root) return;
     overlayOpen = false;
+    overlayMapFocus = false;
     overlayContext.root.hidden = true;
+    document.getElementById("play-workspace-rules-btn")?.setAttribute("aria-expanded", "false");
     renderContext(inlineContext);
     const target = overlayReturnFocus?.isConnected ? overlayReturnFocus : inlineContext?.root?.querySelector?.(".node-editor-large-open");
     overlayReturnFocus = null;
     target?.focus?.({ preventScroll: true });
   }
 
-  function compareNumbers(left, operator, right) {
-    if (operator === "=") return left === right;
-    if (operator === "!=") return left !== right;
-    if (operator === "<") return left < right;
-    if (operator === "<=") return left <= right;
-    if (operator === ">") return left > right;
-    return left >= right;
+  function runtimeTrace(node, result) {
+    if (!result) return "No rule result.";
+    const predicate = result.predicate;
+    if (predicate?.kind === "number") return `${predicate.variable}: ${predicate.actual} ${predicate.operator} ${predicate.expected} → ${predicate.matched ? "true" : "false"} → ${predicate.route}`;
+    if (predicate?.kind === "value") return `${predicate.variable}: ${predicate.actual || "(empty)"} = ${predicate.expected} → ${predicate.matched ? "true" : "false"} → ${predicate.route}`;
+    if (predicate?.kind === "membership") return `${predicate.item || "item"} ∈ inventory → ${predicate.matched ? "true" : "false"} → ${predicate.route}`;
+    const beforeVars = result.before?.variables || {};
+    const afterVars = result.after?.variables || {};
+    const changedVariable = [...new Set([...Object.keys(beforeVars), ...Object.keys(afterVars)])].find(key => String(beforeVars[key] ?? "") !== String(afterVars[key] ?? ""));
+    if (changedVariable) return `${changedVariable}: ${String(beforeVars[changedVariable] ?? "(unset)")} → ${String(afterVars[changedVariable] ?? "(unset)")}`;
+    const beforeItems = result.before?.inventory || [];
+    const afterItems = result.after?.inventory || [];
+    const added = afterItems.find(item => !beforeItems.includes(item));
+    if (added) return `inventory: {${beforeItems.join(", ") || "empty"}} → added ${added}`;
+    const removed = beforeItems.find(item => !afterItems.includes(item));
+    if (removed) return `inventory: {${beforeItems.join(", ") || "empty"}} → removed ${removed}`;
+    return nodeReading(node);
   }
 
-  function executeNode(id, payload = {}, seen = new Set()) {
+  function addRuntimeAction(actions, copy) {
+    actions.unshift(copy);
+    actions.splice(6);
+  }
+
+  function queueStep(nextId, payload, seen) {
+    stepQueue = nextId ? [{ id: nextId, payload: { ...payload }, seen: new Set(seen) }] : [];
+    setRuntimeState({ nextIds: nextId ? [nextId] : [] });
+  }
+
+  function beginStepSession(node) {
+    activeIds = new Map();
+    activeLinks = new Map();
+    resetRuntimeState();
+    stepRootId = node.id;
+    setRuntimeState({ testRoot: label(node), lastTrigger: `Step test: ${node.name || TYPES[node.type]}` });
+    logRuntime(`Step test started from ${node.name}.`);
+    if (EVENT_TYPES.has(node.type)) {
+      pulseNode(node.id);
+      const nextId = node.next || "";
+      setRuntimeState({ currentId: node.id, currentLabel: label(node), lastTrace: `${node.name}: event activated.`, nextIds: nextId ? [nextId] : [] });
+      if (nextId) pulseLink(node.id, nextId);
+      queueStep(nextId, {}, new Set([node.id]));
+      api.setStatus(nextId ? "Start rule activated. Press Step Rule again to run the next rule." : "This start rule has no next rule.");
+      return false;
+    }
+    stepQueue = [{ id: node.id, payload: {}, seen: new Set() }];
+    return true;
+  }
+
+  function stepRule() {
+    const node = selectedNode();
+    if (!node) return;
+    if (stepRootId !== node.id || (!stepQueue.length && runtimeState.currentId !== node.id)) {
+      const ready = beginStepSession(node);
+      if (!ready) { renderAllContexts(false); return; }
+    }
+    const next = stepQueue.shift();
+    if (!next) {
+      api.setStatus("That stepped rule path is complete. Select another rule or press Step Rule to start it again.");
+      stepRootId = "";
+      return;
+    }
+    executeNode(next.id, next.payload, next.seen, { step: true });
+    renderAllContexts(false);
+  }
+
+  function executeNode(id, payload = {}, seen = new Set(), options = {}) {
     const data = graph();
     const node = data.nodes.find(item => item.id === id);
     if (!node || seen.has(id) || seen.size > 40) return;
     seen.add(id);
     pulseNode(id);
     logRuntime(`Ran ${TYPES[node.type] || "Node"}: ${node.name || id}.`);
-    let nextId = node.next;
-    let nextDelay = 0;
+    if (!RuleRuntime?.evaluateNode) { api.setStatus("Rule runtime is unavailable."); return; }
+    const result = RuleRuntime.evaluateNode(node, { variables: data.runtime.variables, inventory: data.runtime.inventory });
+    if (!result) return;
+    data.runtime.variables = result.state.variables;
+    data.runtime.inventory = result.state.inventory;
+    const variableKeys = new Set([...Object.keys(result.before.variables || {}), ...Object.keys(result.after.variables || {})]);
+    const variablesChanged = [...variableKeys].some(key => String(result.before.variables?.[key] ?? "") !== String(result.after.variables?.[key] ?? ""));
+    const inventoryChanged = (result.before.inventory || []).join("\u0000") !== (result.after.inventory || []).join("\u0000");
+    if (variablesChanged) { syncRuntimeVariables(data); api.drawPlayScene?.(); }
+    if (inventoryChanged) syncRuntimeInventory(data);
+
     const actions = [...(runtimeState.actions || [])];
-    function addAction(copy) {
-      actions.unshift(copy);
-      actions.splice(6);
-    }
-    if (node.type === "actionMessage") {
-      const textEventMessage = Number(node.data.textLine) >= 0 ? api.getTextEventMessage?.(Number(node.data.textLine)) : "";
-      api.showPlayMessage?.(textEventMessage || node.data.message || node.name || "Message");
-      addAction(`Showed text from ${node.name}.`);
-      if (nextId) nextDelay = MESSAGE_STEP_DELAY;
-    }
-    if (node.type === "actionFinish") {
-      api.finishPlayMode?.(node.data.message || "Finished.");
-      addAction(`Finished the game at ${node.name}.`);
-      nextId = "";
-    }
-    if (node.type === "actionDialogue") {
-      const dialogueNext = nextId;
-      nextId = "";
-      api.startPlayDialogue?.(Math.max(0, Number(node.data.line) || 0), () => {
-        if (!dialogueNext) return;
-        pulseLink(node.id, dialogueNext);
-        executeNode(dialogueNext, payload, seen);
-      });
-      addAction(`Started dialogue at ${textEventLabel(node.data.line)}.`);
-      setRuntimeState({ currentId: node.id, currentLabel: label(node), actions, nextIds: dialogueNext ? [dialogueNext] : [] });
-      return;
-    }
-    if (node.type === "actionCheckpoint") {
-      api.setPlayCheckpoint?.();
-      addAction(`Saved checkpoint at ${node.name}.`);
-    }
-    if (node.type === "actionMoveActor") {
-      api.movePlayActor?.(Number(node.data.dx) || 0, Number(node.data.dy) || 0);
-      addAction(`Moved actor by ${Number(node.data.dx) || 0}, ${Number(node.data.dy) || 0}.`);
-    }
-    if (node.type === "actionSetVariable") {
-      data.runtime.variables[node.data.variable] = String(node.data.value ?? "true");
-      syncRuntimeVariables(data);
-      api.drawPlayScene?.();
-      addAction(`Set ${node.data.variable} to ${node.data.value}.`);
-    }
-    if (node.type === "actionChangeNumber") {
-      const current = Number(data.runtime.variables[node.data.variable]) || 0;
-      const changed = current + (Number(node.data.amount) || 0);
-      data.runtime.variables[node.data.variable] = String(changed);
-      syncRuntimeVariables(data);
-      addAction(`Changed ${node.data.variable} from ${current} to ${changed}.`);
-    }
-    if (node.type === "actionAddItem") {
-      if (!data.runtime.inventory.includes(node.data.item)) data.runtime.inventory.push(node.data.item);
-      syncRuntimeInventory(data);
-      addAction(`Added ${node.data.item} to inventory.`);
-    }
-    if (node.type === "actionRemoveItem") {
-      data.runtime.inventory = data.runtime.inventory.filter(item => item !== node.data.item);
-      syncRuntimeInventory(data);
-      addAction(`Removed ${node.data.item} from inventory.`);
-    }
-    if (node.type === "actionScene") {
-      const changed = api.switchPlayScene?.(node.data.sceneId);
-      addAction(changed ? `Changed scene to ${sceneLabel(node.data.sceneId)}.` : "Scene did not change.");
-      nextId = "";
-    }
-    if (node.type === "actionPlaySound") {
-      const played = api.playGameAudio?.(node.data.audioAssetId, { volume: node.data.audioVolume, loop: node.data.audioLoop });
-      addAction(played ? `Played ${audioLabel(node.data.audioAssetId)}.` : "Audio clip could not be played.");
-    }
-    if (node.type === "actionStopSound") {
-      api.stopGameAudio?.(node.data.audioStopScope);
-      addAction(`Stopped ${node.data.audioStopScope === "music" ? "music" : node.data.audioStopScope === "sfx" ? "sound effects" : "all audio"}.`);
-    }
-    if (node.type === "logicVariable") {
-      const matched = String(data.runtime.variables[node.data.variable] ?? "") === String(node.data.equals);
-      nextId = matched ? node.next : node.alt;
-      addAction(`Checked ${node.data.variable}: ${matched ? "true" : "false"}.`);
-    }
-    if (node.type === "logicCompareNumber") {
-      const current = Number(data.runtime.variables[node.data.variable]) || 0;
-      const matched = compareNumbers(current, node.data.operator, Number(node.data.compare) || 0);
-      nextId = matched ? node.next : node.alt;
-      addAction(`Compared ${current} ${node.data.operator || ">="} ${Number(node.data.compare) || 0}: ${matched ? "true" : "false"}.`);
-    }
-    if (node.type === "logicHasItem") {
-      const matched = data.runtime.inventory.includes(node.data.item);
-      nextId = matched ? node.next : node.alt;
-      addAction(`Checked inventory for ${node.data.item}: ${matched ? "found" : "not found"}.`);
-    }
-    const nextIds = nextId ? [nextId] : [];
-    setRuntimeState({ currentId: node.id, currentLabel: label(node), actions, nextIds });
+    let dialogueStarted = false;
+    result.effects.forEach(effect => {
+      if (effect.type === "message") {
+        const textEventMessage = Number(effect.textLine) >= 0 ? api.getTextEventMessage?.(Number(effect.textLine)) : "";
+        api.showPlayMessage?.(textEventMessage || effect.message || node.name || "Message");
+        addRuntimeAction(actions, `Showed text from ${node.name}.`);
+      }
+      if (effect.type === "dialogue") {
+        dialogueStarted = true;
+        const continueDialogue = effect.continuationId ? () => {
+          pulseLink(node.id, effect.continuationId);
+          if (options.step) queueStep(effect.continuationId, payload, seen);
+          else executeNode(effect.continuationId, payload, seen);
+        } : null;
+        api.startPlayDialogue?.(Math.max(0, Number(effect.line) || 0), continueDialogue);
+        addRuntimeAction(actions, `Started dialogue at ${textEventLabel(effect.line)}.`);
+      }
+      if (effect.type === "checkpoint") { api.setPlayCheckpoint?.(); addRuntimeAction(actions, `Saved checkpoint at ${node.name}.`); }
+      if (effect.type === "moveActor") { api.movePlayActor?.(effect.dx, effect.dy); addRuntimeAction(actions, `Moved actor by ${effect.dx}, ${effect.dy}.`); }
+      if (effect.type === "finish") { api.finishPlayMode?.(effect.message || "Finished."); addRuntimeAction(actions, `Finished the game at ${node.name}.`); }
+      if (effect.type === "scene") { const changed = api.switchPlayScene?.(effect.sceneId); addRuntimeAction(actions, changed ? `Changed scene to ${sceneLabel(effect.sceneId)}.` : "Scene did not change."); }
+      if (effect.type === "playSound") { const played = api.playGameAudio?.(effect.assetId, { volume: effect.volume, loop: effect.loop }); addRuntimeAction(actions, played ? `Played ${audioLabel(effect.assetId)}.` : "Audio clip could not be played."); }
+      if (effect.type === "stopSound") { api.stopGameAudio?.(effect.scope); addRuntimeAction(actions, `Stopped ${effect.scope === "music" ? "music" : effect.scope === "sfx" ? "sound effects" : "all audio"}.`); }
+    });
+
+    if (node.type === "actionSetVariable") addRuntimeAction(actions, `Set ${node.data.variable} to ${node.data.value}.`);
+    if (node.type === "actionChangeNumber") addRuntimeAction(actions, `Changed ${node.data.variable} to ${result.after.variables[node.data.variable]}.`);
+    if (node.type === "actionAddItem") addRuntimeAction(actions, `Added ${node.data.item} to inventory.`);
+    if (node.type === "actionRemoveItem") addRuntimeAction(actions, `Removed ${node.data.item} from inventory.`);
+    if (result.predicate?.kind === "value") addRuntimeAction(actions, `Checked ${result.predicate.variable}: ${result.predicate.matched ? "true" : "false"}.`);
+    if (result.predicate?.kind === "number") addRuntimeAction(actions, `Compared ${result.predicate.actual} ${result.predicate.operator} ${result.predicate.expected}: ${result.predicate.matched ? "true" : "false"}.`);
+    if (result.predicate?.kind === "membership") addRuntimeAction(actions, `Checked inventory for ${result.predicate.item}: ${result.predicate.matched ? "found" : "not found"}.`);
+
+    const nextId = result.nextId || "";
+    const nextIds = nextId ? [nextId] : result.continuationId ? [result.continuationId] : [];
+    setRuntimeState({ currentId: node.id, currentLabel: label(node), actions, nextIds, lastTrace: runtimeTrace(node, result) });
+    if (dialogueStarted) return;
     if (nextId) {
       pulseLink(node.id, nextId);
-      window.setTimeout(() => executeNode(nextId, payload, seen), nextDelay);
-    }
+      if (options.step) queueStep(nextId, payload, seen);
+      else window.setTimeout(() => executeNode(nextId, payload, seen), result.delayMs);
+    } else if (options.step) stepQueue = [];
   }
 
   function runEvent(type, payload = {}) {
     if (type === "sceneStart") lastEntered.clear();
-    const nodes = graph().nodes.filter(node => {
-      if (type === "sceneStart") return node.type === "eventStart" && (!node.data.sceneId || String(node.data.sceneId) === String(payload.sceneId || ""));
-      if (type === "triggerEnter") {
-        const choices = new Set(["any", payload.name, payload.id, ...(Array.isArray(payload.ids) ? payload.ids : [])].map(item => String(item || "")));
-        return node.type === "eventTrigger" && (!node.data.sceneId || String(node.data.sceneId) === String(payload.sceneId || api?.getState?.()?.playMode?.activeSceneId || "")) && choices.has(String(node.data.trigger || "any"));
-      }
-      if (type === "characterInteract") {
-        const choices = new Set(["any", payload.name, payload.id].map(item => String(item || "")));
-        return node.type === "eventInteract" && (!node.data.sceneId || String(node.data.sceneId) === String(payload.sceneId || api?.getState?.()?.playMode?.activeSceneId || "")) && choices.has(String(node.data.character || "any"));
-      }
-      return false;
-    });
+    const currentSceneId = String(payload.sceneId || api?.getState?.()?.playMode?.activeSceneId || "");
+    const nodes = graph().nodes.filter(node => RuleRuntime?.eventMatches?.(node, type, payload, currentSceneId));
     if (nodes.length) {
       const message = type === "triggerEnter" ? `Player touched ${payload?.name || "an object"}.` : type === "characterInteract" ? `Player interacted with ${payload?.name || "a character"}.` : "Scene start rules began.";
       logRuntime(message);
@@ -2173,6 +2322,7 @@
           api.setStatus("Connection cancelled.");
         }
         cancelPendingConnection("Connection cancelled.");
+        if (overlayOpen && overlayMapFocus && !wasConnecting) { toggleMapFocus(); return; }
         if (overlayOpen && !wasConnecting) closeOverlay();
       });
     }

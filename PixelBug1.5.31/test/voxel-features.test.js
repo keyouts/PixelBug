@@ -108,6 +108,41 @@ test("voxel expansion controls are connected", () => {
   ].forEach(name => assert.match(renderer, new RegExp(name.replace(".", "\\."))));
 });
 
+
+test("voxel facts report dimensions, components, surface, and interior cells", () => {
+  const solid = [];
+  for (let z = 0; z < 3; z++) for (let y = 0; y < 3; y++) for (let x = 0; x < 3; x++) solid.push({ x, y, z });
+  const facts = features.facts(solid);
+  assert.equal(facts.count, 27);
+  assert.equal(facts.componentCount, 1);
+  assert.equal(facts.surfaceCount, 26);
+  assert.equal(facts.interiorCount, 1);
+  assert.deepEqual([facts.width, facts.height, facts.depth], [3, 3, 3]);
+  assert.deepEqual(facts.center, { x: 1, y: 1, z: 1 });
+  assert.equal(features.facts([...solid, { x: 8, y: 8, z: 8 }]).componentCount, 2);
+});
+
+test("modifier planning is deterministic and non-destructive", () => {
+  const source = [{ x: 1, y: 1, z: 1, color: "#fff" }];
+  const occupied = source.map(cube => ({ ...cube }));
+  const array = features.modifierPreview("array", source, occupied, { width: 8, height: 8, depth: 8, axis: "x", count: 3, spacing: 2 });
+  assert.deepEqual(array.added.map(features.key), ["3,1,1", "5,1,1"]);
+  const firstNoise = features.modifierPreview("noise", source, occupied, { width: 8, height: 8, depth: 8, amount: 100, noiseSeed: 42 });
+  const secondNoise = features.modifierPreview("noise", source, occupied, { width: 8, height: 8, depth: 8, amount: 100, noiseSeed: 42 });
+  assert.deepEqual(firstNoise.moves, secondNoise.moves);
+  assert.deepEqual(source, [{ x: 1, y: 1, z: 1, color: "#fff" }]);
+});
+
+test("voxel facts and modifier previews expose accessible readouts", () => {
+  assert.match(html, /id="voxel-mode-selection-facts"/);
+  assert.match(html, /id="voxel-mode-selection-connectivity-help"/);
+  assert.match(html, /id="voxel-mode-modifier-preview-info"[^>]*aria-live="polite"|aria-live="polite"[^>]*id="voxel-mode-modifier-preview-info"/);
+  assert.match(renderer, /VoxelFeatures\?\.facts/);
+  assert.match(renderer, /VoxelFeatures\.modifierPreview/);
+  assert.match(renderer, /drawVoxelModeModifierPreview/);
+  assert.match(renderer, /!options\.animationPreview && !options\.exporting/);
+});
+
 test("voxel expansion adds no package dependency", () => {
   const packageJson = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
   assert.equal(packageJson.dependencies, undefined);

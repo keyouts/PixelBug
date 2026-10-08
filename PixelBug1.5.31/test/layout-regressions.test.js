@@ -155,7 +155,9 @@ test("play mode uses focused tool workspaces with one live tester", () => {
   assert.match(css, /body\.play-mode \.play-section-grid > \[data-play-workspace-source\][\s\S]*?display:\s*none !important/);
   assert.match(playWorkspaces, /parkNodes\(\[stageShell\], previewHost\)/);
   assert.match(playWorkspaces, /restoreNodes\(\[stageShell\]\)/);
-  assert.match(playWorkspaces, /name === "rules"[\s\S]*?#node-editor-card/);
+  assert.match(playWorkspaces, /function openRulesDirect\(\)[\s\S]*?PixelBugNodeEditor\?\.openOverlay/);
+  assert.match(playWorkspaces, /data\.playWorkspaceOpen === "rules"|dataset\.playWorkspaceOpen === "rules"/);
+  assert.doesNotMatch(playWorkspaces, /name === "rules"[\s\S]*?#node-editor-card/);
   assert.doesNotMatch(playWorkspaces, /cloneNode|createElement\("canvas"\)/);
 });
 

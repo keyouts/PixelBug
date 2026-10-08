@@ -1,6 +1,6 @@
 {
   "name": "pixel-bug",
-  "version": "1.5.23",
+  "version": "1.5.31",
   "description": "Pixel art and sprite editor",
   "main": "src/main.js",
   "scripts": {

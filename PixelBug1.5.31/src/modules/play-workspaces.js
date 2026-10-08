@@ -44,12 +44,13 @@
   }
 
   function sourceNodes(name) {
-    if (name === "rules") {
-      window.PixelBugNodeEditor?.render?.();
-      const card = $("#node-editor-card");
-      return card ? [card] : [];
-    }
     return staticSources.filter(source => source.dataset.playWorkspaceSource === name);
+  }
+
+  function openRulesDirect() {
+    if (!overlay.hidden) closeWorkspace(false);
+    window.PixelBugNodeEditor?.render?.();
+    window.PixelBugNodeEditor?.openOverlay?.();
   }
 
   function workspaceTitle(name) {
@@ -93,7 +94,7 @@
     return true;
   }
 
-  function closeWorkspace() {
+  function closeWorkspace(restoreFocus = true) {
     if (overlay.hidden) return;
     restoreNodes(activeNodes);
     restoreNodes([stageShell]);
@@ -108,12 +109,18 @@
     requestAnimationFrame(() => {
       window.dispatchEvent(new Event("resize"));
       window.PixelBugPlayGuide?.render?.();
-      target?.focus?.();
+      if (restoreFocus) target?.focus?.();
     });
   }
 
-  launchers.forEach(button => button.addEventListener("click", () => openWorkspace(button.dataset.playWorkspaceOpen, button)));
-  switchers.forEach(button => button.addEventListener("click", () => openWorkspace(button.dataset.playWorkspaceSwitch, activeTrigger)));
+  launchers.forEach(button => button.addEventListener("click", () => {
+    if (button.dataset.playWorkspaceOpen === "rules") { openRulesDirect(); return; }
+    openWorkspace(button.dataset.playWorkspaceOpen, button);
+  }));
+  switchers.forEach(button => button.addEventListener("click", () => {
+    if (button.dataset.playWorkspaceSwitch === "rules") { openRulesDirect(); return; }
+    openWorkspace(button.dataset.playWorkspaceSwitch, activeTrigger);
+  }));
   undoBtn?.addEventListener("click", () => $("#play-undo-btn")?.click());
   redoBtn?.addEventListener("click", () => $("#play-redo-btn")?.click());
   closeBtn.addEventListener("click", closeWorkspace);

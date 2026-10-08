@@ -107,6 +107,10 @@ select {
   background-size: 6px 6px, 6px 6px;
   background-repeat: no-repeat;
   padding-right: 34px;
+  box-sizing: border-box;
+  max-width: 100%;
+  transform: none;
+  transition: background-color .12s ease, color .12s ease, filter .12s ease;
 }
 button { cursor:pointer; transition:transform .1s ease, box-shadow .1s ease, background .1s ease, color .1s ease; }
 button:hover { background:var(--soft); }
@@ -307,7 +311,6 @@ input[type="range"] { width:100%; accent-color:var(--ink); }
 /* Tactile polish */
 button,
 .file-upload-btn,
-select,
 input[type="color"],
 input[type="number"],
 input[type="text"],
@@ -317,7 +320,6 @@ input[type="text"],
 
 button:hover,
 .file-upload-btn:hover,
-select:hover,
 input[type="color"]:hover,
 input[type="number"]:hover,
 input[type="text"]:hover,
@@ -328,7 +330,6 @@ input[type="text"]:hover,
 
 button:active,
 .file-upload-btn:active,
-select:active,
 input[type="color"]:active,
 input[type="number"]:active,
 input[type="text"]:active {

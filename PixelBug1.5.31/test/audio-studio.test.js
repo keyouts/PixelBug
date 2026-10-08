@@ -11,6 +11,7 @@ const html = fs.readFileSync(path.join(root, "src", "index.html"), "utf8");
 const renderer = fs.readFileSync(path.join(root, "src", "renderer.js"), "utf8");
 const recoveryWorkflow = fs.readFileSync(path.join(root, "src", "modules", "renderer", "recovery-workflow.js"), "utf8");
 const exportRuntime = fs.readFileSync(path.join(root, "src", "modules", "tiny-game-export.js"), "utf8");
+const ruleRuntime = fs.readFileSync(path.join(root, "src", "modules", "play-rule-runtime.js"), "utf8");
 const rules = fs.readFileSync(path.join(root, "src", "modules", "node-editor.js"), "utf8");
 const styles = (fs.readFileSync(path.join(root, "src", "styles.css"), "utf8") + fs.readFileSync(path.join(root, "src", "styles-workspaces.css"), "utf8"));
 
@@ -82,6 +83,7 @@ test("Audio Studio stays in a focused Play Mode workspace", () => {
   assert.match(recoveryWorkflow, /queueMirror\(payload\)/);
   assert.match(rules, /actionPlaySound/);
   assert.match(rules, /actionStopSound/);
-  assert.match(exportRuntime, /playRuntimeAudio\(data\.audioAssetId/);
+  assert.match(ruleRuntime, /type: "playSound"/);
+  assert.match(exportRuntime, /effect\.type === "playSound"/);
   assert.match(exportRuntime, /runtimeAudioMixer/);
 });
