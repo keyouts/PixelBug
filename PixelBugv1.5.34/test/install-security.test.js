@@ -122,3 +122,27 @@ test("packaged application excludes development dependencies", () => {
   assert.equal(manifest.build.electronFuses.enableEmbeddedAsarIntegrityValidation, true);
   assert.equal(manifest.build.electronFuses.onlyLoadAppFromAsar, true);
 });
+
+
+test("security advisory fixes stay pinned across the locked dependency graph", () => {
+  assert.equal(manifest.devDependencies.electron, "42.11.18");
+  const requiredVersions = {
+    "node_modules/electron": "42.11.18",
+    "node_modules/fast-uri": "3.1.9",
+    "node_modules/undici": "7.30.1",
+    "node_modules/node-gyp/node_modules/undici": "6.29.1"
+  };
+  for (const [location, expectedVersion] of Object.entries(requiredVersions)) {
+    const record = lock.packages[location];
+    const name = location.split("/").at(-1);
+    assert.equal(record.version, expectedVersion);
+    assert.match(record.integrity, /^sha512-[a-zA-Z0-9+/]+={0,2}$/);
+    assert.equal(record.resolved, `https://registry.npmjs.org/${name}/-/${name}-${expectedVersion}.tgz`);
+  }
+});
+
+test("Squirrel installer script remains explicitly denied for NSIS builds", () => {
+  assert.deepEqual(manifest.allowScripts, { "electron-winstaller": false });
+  assert.equal(lock.packages["node_modules/electron-winstaller"].version, "5.4.0");
+  assert.equal(manifest.build.win.target, "nsis");
+});

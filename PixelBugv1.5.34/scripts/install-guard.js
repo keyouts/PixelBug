@@ -19,6 +19,7 @@ const BLOCKED_RELEASES = new Set([
 const ALLOWED_INSTALL_SCRIPTS = new Set(["electron-winstaller@5.4.0"]);
 const ALLOWED_MISSING_INTEGRITY = new Set();
 const REQUIRED_OVERRIDES = Object.freeze({ "@xmldom/xmldom": "0.8.15" });
+const REQUIRED_SCRIPT_POLICY = Object.freeze({ "electron-winstaller": false });
 
 function packageName(packagePath) {
   let name = packagePath.slice("node_modules/".length);
@@ -38,6 +39,7 @@ function verify(root = path.join(__dirname, "..")) {
   if (Object.keys(manifest.dependencies || {}).length) fail("runtime dependencies are not permitted");
   const declared = manifest.devDependencies || {};
   if (JSON.stringify(manifest.overrides || {}) !== JSON.stringify(REQUIRED_OVERRIDES)) fail("security overrides changed");
+  if (JSON.stringify(manifest.allowScripts || {}) !== JSON.stringify(REQUIRED_SCRIPT_POLICY)) fail("install script policy changed");
   for (const [name, version] of Object.entries(declared)) {
     if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(version)) fail(`${name} must use an exact version`);
   }

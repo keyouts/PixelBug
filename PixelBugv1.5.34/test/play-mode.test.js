@@ -88,10 +88,10 @@ test("rule editor stays out of the inline play layout", () => {
 });
 
 test("play review adds no package dependencies", () => {
-  assert.equal(packageJson.version, "1.5.33");
+  assert.equal(packageJson.version, "1.5.34");
   assert.doesNotMatch(renderer, /1\.5\.29/);
   assert.deepEqual(packageJson.dependencies || {}, {});
-  assert.equal(packageJson.devDependencies.electron, "42.11.11");
+  assert.equal(packageJson.devDependencies.electron, "42.11.18");
   assert.equal(packageJson.devDependencies["electron-builder"], "26.15.7");
 });
 

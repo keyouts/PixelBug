@@ -14348,7 +14348,7 @@ function buildVoxelModeJSON() {
     format: "pixelbug-voxel-model",
     type: "pixelbug-voxel-model",
     version: 5,
-    appVersion: "1.5.33",
+    appVersion: "1.5.34",
     sourceId: model.sourceId,
     width: model.width,
     height: model.height,
@@ -15998,7 +15998,7 @@ function voxelExportMetadata(kind) {
   return {
     type: kind,
     app: "Pixel Bug",
-    appVersion: "1.5.33",
+    appVersion: "1.5.34",
     version: "1.0",
     canvasSize: state.size,
     previewSize: voxelPreviewSize(),
@@ -16172,7 +16172,7 @@ function buildBlenderPackMetadata() {
     ...voxelExportMetadata("pixelbug-blender-pack"),
     description: "Blender handoff bundle containing Nodes JSON, Grease Pencil JSON, palette, metadata, and importer docs.",
     packageVersion: "1.0",
-    appVersion: "1.5.33",
+    appVersion: "1.5.34",
     files: {
       nodes: "pixel-bug-geometry-nodes.json",
       greasePencil: "pixel-bug-grease-pencil.json",
@@ -16187,7 +16187,7 @@ function buildBlenderPaletteJSON() {
   const colors = Array.from(new Set([...(state.palette || []), ...blenderVoxelCubes().map(cube => cube.color)].filter(isHexColor)));
   return {
     type: "pixelbug-blender-palette",
-    appVersion: "1.5.33",
+    appVersion: "1.5.34",
     colors,
     activeColor: isHexColor(color) ? color : colors[0] || "#000000",
     presets: Array.isArray(state.palettePresets) ? state.palettePresets.map(preset => ({
@@ -16320,7 +16320,7 @@ async function exportSheet() {
   if (sheetJsonInput?.checked) {
     const atlas = {
       frames: atlasFrames,
-      meta: { app: "Pixel Bug", version: "1.5.33", image: `${baseName}.png`, format: "RGBA8888", size: { w: sheet.width, h: sheet.height }, scale, clip: { name: clip.name, start: clip.start, end: clip.end, loop: clip.loop } }
+      meta: { app: "Pixel Bug", version: "1.5.34", image: `${baseName}.png`, format: "RGBA8888", size: { w: sheet.width, h: sheet.height }, scale, clip: { name: clip.name, start: clip.start, end: clip.end, loop: clip.loop } }
     };
     const result = await window.pixelBug.saveFile({ title: "Export Spritesheet Atlas", defaultPath: `${baseName}.json`, filters: [{ name: "JSON Atlas", extensions: ["json"] }], data: JSON.stringify(atlas, null, 2) });
     setStatus(result.ok ? "Spritesheet and atlas exported." : "Spritesheet exported. Atlas save cancelled.");

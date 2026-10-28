@@ -1,6 +1,6 @@
 {
   "name": "pixel-bug",
-  "version": "1.5.33",
+  "version": "1.5.34",
   "description": "Pixel art and sprite editor",
   "main": "src/main.js",
   "scripts": {
@@ -31,7 +31,7 @@
     "node": ">=22.12.0"
   },
   "devDependencies": {
-    "electron": "42.11.11",
+    "electron": "42.11.18",
     "electron-builder": "26.15.7"
   },
   "productName": "Pixel Bug",
@@ -93,5 +93,8 @@
   },
   "overrides": {
     "@xmldom/xmldom": "0.8.15"
+  },
+  "allowScripts": {
+    "electron-winstaller": false
   }
 }
