@@ -1,0 +1,1097 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; media-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none';" />
+<title>PixelBug Voxel Scene Preview</title>
+<style>
+:root { color-scheme: dark; --bg:#141414; --ink:#f7f0da; --edge:#050505; --panel:#242424; --accent:#ffd447; }
+* { box-sizing: border-box; }
+html, body { margin:0; min-height:100%; background:var(--bg); color:var(--ink); font-family:system-ui, sans-serif; }
+body { display:grid; place-items:center; padding:16px; overflow:auto; }
+.wrap { width:100%; max-width:4096px; }
+h1 { width:min(100%, 640px); margin:0 auto 10px; font-size:clamp(20px, 4vw, 32px); text-transform:uppercase; letter-spacing:.04em; }
+.stage { border:4px solid var(--edge); box-shadow:8px 8px 0 var(--edge); background:#fff; width:min(100%, 640px); height:auto; aspect-ratio:640 / 360; margin:0 auto; image-rendering:pixelated; }
+canvas { display:block; width:100%; height:100%; image-rendering:pixelated; outline:none; }
+.help { width:min(100%, 640px); margin:16px auto 0; padding:12px 14px; border:3px solid var(--edge); background:var(--panel); box-shadow:5px 5px 0 var(--edge); font-weight:800; line-height:1.45; }
+kbd { background:var(--accent); color:#111; border:2px solid var(--edge); padding:1px 5px; box-shadow:2px 2px 0 var(--edge); }
+.sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+</style>
+</head>
+<body>
+<main class="wrap">
+<h1>PixelBug Voxel Scene Preview</h1>
+<div class="stage"><canvas id="game" width="640" height="360" tabindex="0" aria-label="Tiny exported Pixel Bug game"></canvas></div>
+<p class="help"><kbd>A</kbd>/<kbd>D</kbd> or arrows move. <kbd>W</kbd>/<kbd>Space</kbd> jumps. <kbd>E</kbd>/<kbd>Enter</kbd> advances dialogue. <kbd>R</kbd> returns to the latest checkpoint.</p>
+<p class="sr-only" id="game-status" aria-live="polite">Game ready.</p>
+</main>
+<script>
+const CORE = (function createPlayRuntimeCore() {
+  const REFERENCE_FPS = 60;
+
+  function finite(value, fallback) {
+    const number = Number(value);
+    return Number.isFinite(number) ? number : fallback;
+  }
+
+  function clamp(value, minimum, maximum) {
+    return Math.max(minimum, Math.min(finite(value, minimum), maximum));
+  }
+
+  function frameDelta(now, previous, fallback = 1 / REFERENCE_FPS) {
+    const current = finite(now, 0);
+    const before = finite(previous, 0);
+    if (current <= 0 || before <= 0 || current <= before) return fallback;
+    return clamp((current - before) / 1000, 1 / 1000, 0.05);
+  }
+
+  function physics(playMode = {}) {
+    const moveUnits = clamp(finite(playMode.moveSpeed, 3), 0.25, 20);
+    const jumpUnits = clamp(finite(playMode.jumpStrength, 8), 0.5, 30);
+    const gravityUnits = clamp(finite(playMode.gravity, 0.45), 0.05, 4);
+    const scrollUnits = clamp(finite(playMode.scrollSpeed, 0), 0, 20);
+    return {
+      moveSpeed: moveUnits * REFERENCE_FPS,
+      jumpSpeed: jumpUnits * REFERENCE_FPS,
+      gravity: gravityUnits * REFERENCE_FPS * REFERENCE_FPS,
+      scrollSpeed: scrollUnits * REFERENCE_FPS
+    };
+  }
+
+  function rectsOverlap(a, b) {
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  function advanceAxis(position, velocity, seconds) {
+    return finite(position, 0) + finite(velocity, 0) * clamp(seconds, 0, 0.05);
+  }
+
+  function advanceVelocity(velocity, acceleration, seconds) {
+    return finite(velocity, 0) + finite(acceleration, 0) * clamp(seconds, 0, 0.05);
+  }
+
+  function autoScroll(cameraX, maxCameraX, scrollSpeed, seconds) {
+    const current = clamp(cameraX, 0, Math.max(0, finite(maxCameraX, 0)));
+    const next = current + Math.max(0, finite(scrollSpeed, 0)) * clamp(seconds, 0, 0.05);
+    return clamp(next, 0, Math.max(0, finite(maxCameraX, 0)));
+  }
+
+  function smoothingAlpha(referenceAlpha, seconds) {
+    const alpha = clamp(referenceAlpha, 0, 1);
+    const frames = clamp(seconds, 0, 0.05) * REFERENCE_FPS;
+    return frames > 0 ? 1 - Math.pow(1 - alpha, frames) : 0;
+  }
+
+  return { REFERENCE_FPS, finite, clamp, frameDelta, physics, rectsOverlap, advanceAxis, advanceVelocity, autoScroll, smoothingAlpha };
+})();
+const RULES = (function createPlayRuleRuntime() {
+  const MAX_INVENTORY = 64;
+
+  function text(value) {
+    return String(value == null ? "" : value);
+  }
+
+  function cleanItem(value) {
+    return text(value).trim().slice(0, 40);
+  }
+
+  function copyState(state = {}) {
+    const variables = state.variables && typeof state.variables === "object" ? { ...state.variables } : {};
+    const inventory = Array.isArray(state.inventory)
+      ? [...new Set(state.inventory.map(cleanItem).filter(Boolean))].slice(0, MAX_INVENTORY)
+      : [];
+    return { variables, inventory };
+  }
+
+  function compareNumbers(left, operator, right) {
+    if (operator === "=") return left === right;
+    if (operator === "!=") return left !== right;
+    if (operator === "<") return left < right;
+    if (operator === "<=") return left <= right;
+    if (operator === ">") return left > right;
+    return left >= right;
+  }
+
+  function snapshot(state) {
+    return { variables: { ...state.variables }, inventory: [...state.inventory] };
+  }
+
+  function evaluateNode(node, state = {}) {
+    if (!node || typeof node !== "object") return null;
+    const runtime = copyState(state);
+    const before = snapshot(runtime);
+    const data = node.data && typeof node.data === "object" ? node.data : {};
+    let nextId = text(node.next);
+    let continuationId = "";
+    let delayMs = 0;
+    let predicate = null;
+    const effects = [];
+
+    if (node.type === "actionMessage") {
+      effects.push({ type: "message", textLine: Number(data.textLine), message: text(data.message || node.name || "Message") });
+      if (nextId) delayMs = 1100;
+    }
+    if (node.type === "actionDialogue") {
+      continuationId = nextId;
+      nextId = "";
+      effects.push({ type: "dialogue", line: Math.max(0, Number(data.line) || 0), continuationId });
+    }
+    if (node.type === "actionCheckpoint") effects.push({ type: "checkpoint" });
+    if (node.type === "actionMoveActor") effects.push({ type: "moveActor", dx: Number(data.dx) || 0, dy: Number(data.dy) || 0 });
+    if (node.type === "actionFinish") {
+      effects.push({ type: "finish", message: text(data.message || "Finished.") });
+      nextId = "";
+    }
+    if (node.type === "actionAddItem") {
+      const item = cleanItem(data.item);
+      if (item && !runtime.inventory.includes(item) && runtime.inventory.length < MAX_INVENTORY) runtime.inventory.push(item);
+    }
+    if (node.type === "actionRemoveItem") {
+      const item = cleanItem(data.item);
+      runtime.inventory = runtime.inventory.filter(entry => entry !== item);
+    }
+    if (node.type === "actionScene") {
+      nextId = "";
+      effects.push({ type: "scene", sceneId: text(data.sceneId) });
+    }
+    if (node.type === "actionPlaySound") effects.push({ type: "playSound", assetId: text(data.audioAssetId), volume: Number(data.audioVolume), loop: data.audioLoop === true });
+    if (node.type === "actionStopSound") effects.push({ type: "stopSound", scope: ["all", "music", "sfx"].includes(data.audioStopScope) ? data.audioStopScope : "all" });
+    if (node.type === "actionSetVariable") {
+      const key = text(data.variable || "flag");
+      runtime.variables[key] = text(data.value == null ? "true" : data.value);
+    }
+    if (node.type === "actionChangeNumber") {
+      const key = text(data.variable || "score");
+      const previous = Number(runtime.variables[key]) || 0;
+      runtime.variables[key] = String(previous + (Number(data.amount) || 0));
+    }
+    if (node.type === "logicVariable") {
+      const key = text(data.variable || "flag");
+      const actual = text(runtime.variables[key]);
+      const expected = text(data.equals == null ? "true" : data.equals);
+      const matched = actual === expected;
+      nextId = matched ? text(node.next) : text(node.alt);
+      predicate = { kind: "value", variable: key, actual, operator: "=", expected, matched, route: matched ? "Then" : "Else" };
+    }
+    if (node.type === "logicHasItem") {
+      const item = cleanItem(data.item);
+      const matched = runtime.inventory.includes(item);
+      nextId = matched ? text(node.next) : text(node.alt);
+      predicate = { kind: "membership", item, matched, route: matched ? "Then" : "Else" };
+    }
+    if (node.type === "logicCompareNumber") {
+      const key = text(data.variable || "score");
+      const actual = Number(runtime.variables[key]) || 0;
+      const operator = ["=", "!=", "<", "<=", ">", ">="].includes(data.operator) ? data.operator : ">=";
+      const expected = Number(data.compare) || 0;
+      const matched = compareNumbers(actual, operator, expected);
+      nextId = matched ? text(node.next) : text(node.alt);
+      predicate = { kind: "number", variable: key, actual, operator, expected, matched, route: matched ? "Then" : "Else" };
+    }
+
+    return {
+      nodeId: text(node.id),
+      nodeType: text(node.type),
+      state: runtime,
+      before,
+      after: snapshot(runtime),
+      nextId,
+      continuationId,
+      delayMs,
+      effects,
+      predicate
+    };
+  }
+
+  function eventMatches(node, type, payload = {}, currentSceneId = "") {
+    if (!node || typeof node !== "object") return false;
+    const data = node.data && typeof node.data === "object" ? node.data : {};
+    const sceneId = text(currentSceneId || payload.sceneId);
+    if (type === "sceneStart") return node.type === "eventStart" && (!data.sceneId || text(data.sceneId) === text(payload.sceneId));
+    if (type === "triggerEnter") {
+      const choices = new Set(["any", payload.name, payload.id, ...(Array.isArray(payload.ids) ? payload.ids : [])].map(text));
+      return node.type === "eventTrigger" && (!data.sceneId || text(data.sceneId) === sceneId) && choices.has(text(data.trigger || "any"));
+    }
+    if (type === "characterInteract") {
+      const choices = new Set(["any", payload.name, payload.id].map(text));
+      return node.type === "eventInteract" && (!data.sceneId || text(data.sceneId) === sceneId) && choices.has(text(data.character || "any"));
+    }
+    return false;
+  }
+
+  return { MAX_INVENTORY, compareNumbers, copyState, evaluateNode, eventMatches };
+})();
+const VOXEL = (function createRuntime() {
+    const imageCache = new WeakMap();
+    const normalizedAssets = new WeakSet();
+    const LIMIT = 24000;
+    const MAX_VARIANTS = 18;
+    function clamp(value, fallback, min, max) {
+      const n = Number(value);
+      return Number.isFinite(n) ? Math.max(min, Math.min(Math.floor(n), max)) : fallback;
+    }
+    function normalizeAsset(raw = {}, index = 0) {
+      if (raw && typeof raw === "object" && normalizedAssets.has(raw)) return raw;
+      const width = clamp(raw.width, 32, 1, 512);
+      const height = clamp(raw.height, 32, 1, 512);
+      const depth = clamp(raw.depth, 32, 1, 512);
+      const seen = new Set();
+      const cubes = [];
+      for (const cube of Array.isArray(raw.cubes) ? raw.cubes.slice(0, LIMIT) : []) {
+        if (!cube || !/^#[0-9a-f]{6}$/i.test(String(cube.color || ""))) continue;
+        const x = Number(cube.x), y = Number(cube.y), z = Number(cube.z);
+        if (![x, y, z].every(Number.isInteger) || x < 0 || x >= width || y < 0 || y >= height || z < 0 || z >= depth) continue;
+        const key = `${x},${y},${z}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        cubes.push({ x, y, z, color: String(cube.color).toLowerCase() });
+      }
+      const poses = (Array.isArray(raw.poses) ? raw.poses : []).slice(0, 24).map((pose, poseIndex) => {
+        const frameSeen = new Set();
+        const frameCubes = [];
+        for (const cube of Array.isArray(pose?.cubes) ? pose.cubes.slice(0, LIMIT) : []) {
+          if (!cube || !/^#[0-9a-f]{6}$/i.test(String(cube.color || ""))) continue;
+          const x = Number(cube.x), y = Number(cube.y), z = Number(cube.z);
+          if (![x, y, z].every(Number.isInteger) || x < 0 || x >= width || y < 0 || y >= height || z < 0 || z >= depth) continue;
+          const key = `${x},${y},${z}`;
+          if (frameSeen.has(key)) continue;
+          frameSeen.add(key);
+          frameCubes.push({ x, y, z, color: String(cube.color).toLowerCase() });
+        }
+        return { id: String(pose?.id || `pose-${poseIndex + 1}`).replace(/[^a-z0-9_-]/gi, "-").slice(0, 48), name: String(pose?.name || `Pose ${poseIndex + 1}`).slice(0, 48), cubes: frameCubes };
+      }).filter(pose => pose.cubes.length);
+      const normalized = {
+        id: String(raw.id || `voxel-${index + 1}`).replace(/[^a-z0-9_-]/gi, "-").slice(0, 48) || `voxel-${index + 1}`,
+        name: String(raw.name || `Voxel ${index + 1}`).slice(0, 48),
+        width, height, depth, cubes, poses, detailStep: clamp(raw.detailStep, 1, 1, 512)
+      };
+      normalizedAssets.add(normalized);
+      return normalized;
+    }
+    function quarterTurn(value) { return ((Math.round(Number(value) || 0) % 4) + 4) % 4; }
+    function rotatedCubes(asset, yaw, poseId = "") {
+      const turn = quarterTurn(yaw);
+      const source = (asset.poses || []).find(pose => pose.id === poseId)?.cubes || asset.cubes;
+      const w = Number(asset.width) || 1, d = Number(asset.depth) || 1;
+      const out = (source || []).map(cube => {
+        const { x, y, z } = cube;
+        if (turn === 1) return { ...cube, x: d - z - 1, z: x };
+        if (turn === 2) return { ...cube, x: w - x - 1, z: d - z - 1 };
+        if (turn === 3) return { ...cube, x: z, z: w - x - 1 };
+        return cube;
+      });
+      return out.sort((a, b) => (a.x + a.z + a.y) - (b.x + b.z + b.y) || a.y - b.y || a.z - b.z || a.x - b.x);
+    }
+    function shade(hex, factor) {
+      const n = parseInt(String(hex).slice(1), 16);
+      const parts = [n >> 16 & 255, n >> 8 & 255, n & 255];
+      return `rgb(${parts.map(v => Math.max(0, Math.min(255, Math.round(v * factor)))).join(",")})`;
+    }
+    function createCanvas(asset, yaw = 0, doc = typeof document !== "undefined" ? document : null, poseId = "", detail = "object") {
+      if (!doc || typeof doc.createElement !== "function") return null;
+      const cubes = rotatedCubes(asset, yaw, poseId);
+      const canvas = doc.createElement("canvas");
+      if (!cubes.length) { canvas.width = canvas.height = 1; return canvas; }
+      // Image bounds
+      let minCellX = Infinity, minCellY = Infinity, minCellZ = Infinity;
+      let maxCellX = -Infinity, maxCellY = -Infinity, maxCellZ = -Infinity;
+      const occupied = new Set();
+      for (const cube of cubes) {
+        minCellX = Math.min(minCellX, cube.x); maxCellX = Math.max(maxCellX, cube.x + 1);
+        minCellY = Math.min(minCellY, cube.y); maxCellY = Math.max(maxCellY, cube.y + 1);
+        minCellZ = Math.min(minCellZ, cube.z); maxCellZ = Math.max(maxCellZ, cube.z + 1);
+        occupied.add(`${cube.x},${cube.y},${cube.z}`);
+      }
+      const iso = (x, y, z) => ({ x: (x - z) * 2, y: x + z - y * 2 });
+      const corners = [];
+      for (const x of [minCellX, maxCellX]) for (const y of [minCellY, maxCellY]) for (const z of [minCellZ, maxCellZ]) corners.push(iso(x, y, z));
+      const minX = Math.min(...corners.map(corner => corner.x));
+      const maxX = Math.max(...corners.map(corner => corner.x));
+      const minY = Math.min(...corners.map(corner => corner.y));
+      const maxY = Math.max(...corners.map(corner => corner.y));
+      const width = Math.max(1, Math.ceil(maxX - minX + 2));
+      const height = Math.max(1, Math.ceil(maxY - minY + 2));
+      // Render quality
+      const limit = detail === "background" ? 384 : 128;
+      const factor = Math.min(1, limit / Math.max(width, height));
+      canvas.width = Math.max(1, Math.ceil(width * factor));
+      canvas.height = Math.max(1, Math.ceil(height * factor));
+      const ctx = canvas.getContext("2d", { alpha: true });
+      if (!ctx) return canvas;
+      ctx.scale(factor, factor);
+      ctx.translate(1 - minX, 1 - minY);
+      const colors = new Map();
+      const color = (hex, brightness) => {
+        const key = `${hex}:${brightness}`;
+        if (!colors.has(key)) colors.set(key, shade(hex, brightness));
+        return colors.get(key);
+      };
+      const visible = (x, y, z) => !occupied.has(`${x},${y},${z}`);
+      function face(cube, vertices, brightness) {
+        ctx.fillStyle = color(cube.color, brightness);
+        ctx.beginPath();
+        vertices.forEach(([x, y, z], index) => {
+          const point = iso(x, y, z);
+          if (index === 0) ctx.moveTo(point.x, point.y); else ctx.lineTo(point.x, point.y);
+        });
+        ctx.closePath();
+        ctx.fill();
+      }
+      for (const cube of cubes) {
+        const { x, y, z } = cube;
+        if (visible(x, y + 1, z)) face(cube, [[x,y+1,z],[x+1,y+1,z],[x+1,y+1,z+1],[x,y+1,z+1]], 1.12);
+        if (visible(x+1, y, z)) face(cube, [[x+1,y,z],[x+1,y,z+1],[x+1,y+1,z+1],[x+1,y+1,z]], 0.8);
+        if (visible(x, y, z+1)) face(cube, [[x,y,z+1],[x+1,y,z+1],[x+1,y+1,z+1],[x,y+1,z+1]], 0.65);
+      }
+      return canvas;
+    }
+    function getCanvas(asset, yaw = 0, doc, poseId = "", detail = "object") {
+      if (!asset || !Array.isArray(asset.cubes)) return null;
+      const turn = quarterTurn(yaw);
+      let variants = imageCache.get(asset);
+      if (!variants) { variants = new Map(); imageCache.set(asset, variants); }
+      const key = `${turn}:${poseId}:${detail}`;
+      if (variants.has(key)) {
+        const cached = variants.get(key);
+        variants.delete(key);
+        variants.set(key, cached);
+        return cached;
+      }
+      const result = createCanvas(asset, turn, doc, poseId, detail);
+      variants.set(key, result);
+      if (variants.size > MAX_VARIANTS) variants.delete(variants.keys().next().value);
+      return result;
+    }
+    function drawBackdrop(ctx, img, width, height, mode = "cover", camera = 0) {
+      if (!ctx || !img || !img.width || !img.height) return false;
+      const fit = ["cover", "contain", "stretch", "tile"].includes(mode) ? mode : "cover";
+      ctx.save();
+      ctx.imageSmoothingEnabled = false;
+      if (fit === "stretch") ctx.drawImage(img, 0, 0, width, height);
+      else {
+        const ratio = fit === "tile" ? Math.max(width / (img.width * 12), Math.max(1, Math.min(3, width / img.width))) : fit === "contain" ? Math.min(width / img.width, height / img.height) : Math.max(width / img.width, height / img.height);
+        const w = Math.max(1, Math.round(img.width * ratio)), h = Math.max(1, Math.round(img.height * ratio));
+        const y = fit === "tile" ? Math.round(height - h) : Math.round((height - h) / 2);
+        const offset = ((camera * (fit === "tile" ? .12 : .08) % w) + w) % w;
+        const start = (fit === "tile" ? 0 : (width - w) / 2) - offset;
+        for (let x = start - w, draws = 0; x < width && draws < 128; x += w, draws++) ctx.drawImage(img, Math.round(x), y, w, h);
+      }
+      ctx.restore();
+      return true;
+    }
+    function findAsset(assets, prop) {
+      if (!prop?.voxelAssetId) return null;
+      return (assets || []).find(item => item.id === prop.voxelAssetId) || null;
+    }
+    function metrics(assets, prop, doc) {
+      const asset = findAsset(assets, prop);
+      if (!asset) return null;
+      const canvas = getCanvas(asset, prop.voxelYaw, doc, prop.voxelPoseId || "");
+      if (!canvas) return null;
+      const scale = Math.max(0.5, Math.min(Number(prop.scale) || 3, 16));
+      return { canvas, w: Math.max(1, Math.round(canvas.width * scale)), h: Math.max(1, Math.round(canvas.height * scale)) };
+    }
+    return { normalizeAsset, quarterTurn, createCanvas, getCanvas, drawBackdrop, findAsset, metrics, MAX_CUBES: LIMIT };
+  })();
+const GAME = {"title":"PixelBug Voxel Scene Preview","exportWidth":640,"exportHeight":360,"sceneBackground":"#b6d8dd","playUi":{},"artWidth":16,"artHeight":24,"frames":{"0":"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAYCAYAAADzoH0MAAAAjUlEQVR4nGNkQANGui7/0cWQwbnLexiR+Uz4FBMDKDaABZvgwZlhWBXbp6+ivgtwGqAb3IWVTbQBl9eWYWUTNAA9mgjJURwGGCZ+zQ7Cm5C4p66jYUL6fGzW/3/RHjgV/4v2YPh8bBaKCwc+KY8aQIWEhFEeBBxD6N99fj0jAwMDg6thIE5DBz4MBt4AAP/GKekjhNGDAAAAAElFTkSuQmCC"},"spriteFrames":{"actor":{},"object":{}},"playMode":{"sceneWidth":640,"sceneHeight":360,"worldWidth":1600,"groundY":308,"actorScale":3,"moveSpeed":4,"jumpStrength":9,"gravity":0.45,"cameraFollow":true,"backgroundFrame":-1,"backgroundScale":"tile","voxelBackgroundAssetId":"hills","voxelBackgroundYaw":1,"voxelAssets":[{"id":"tree","name":"Tree","width":16,"height":16,"depth":16,"cubes":[{"x":3,"y":0,"z":3,"color":"#754627"},{"x":3,"y":0,"z":4,"color":"#754627"},{"x":3,"y":1,"z":3,"color":"#754627"},{"x":3,"y":1,"z":4,"color":"#754627"},{"x":3,"y":2,"z":3,"color":"#754627"},{"x":3,"y":2,"z":4,"color":"#754627"},{"x":3,"y":3,"z":3,"color":"#754627"},{"x":3,"y":3,"z":4,"color":"#754627"},{"x":3,"y":4,"z":3,"color":"#754627"},{"x":3,"y":4,"z":4,"color":"#754627"},{"x":3,"y":5,"z":3,"color":"#754627"},{"x":3,"y":5,"z":4,"color":"#754627"},{"x":3,"y":6,"z":3,"color":"#754627"},{"x":3,"y":6,"z":4,"color":"#754627"},{"x":3,"y":7,"z":3,"color":"#754627"},{"x":3,"y":7,"z":4,"color":"#754627"},{"x":3,"y":8,"z":3,"color":"#754627"},{"x":3,"y":8,"z":4,"color":"#754627"},{"x":4,"y":0,"z":3,"color":"#754627"},{"x":4,"y":0,"z":4,"color":"#754627"},{"x":4,"y":1,"z":3,"color":"#754627"},{"x":4,"y":1,"z":4,"color":"#754627"},{"x":4,"y":2,"z":3,"color":"#754627"},{"x":4,"y":2,"z":4,"color":"#754627"},{"x":4,"y":3,"z":3,"color":"#754627"},{"x":4,"y":3,"z":4,"color":"#754627"},{"x":4,"y":4,"z":3,"color":"#754627"},{"x":4,"y":4,"z":4,"color":"#754627"},{"x":4,"y":5,"z":3,"color":"#754627"},{"x":4,"y":5,"z":4,"color":"#754627"},{"x":4,"y":6,"z":3,"color":"#754627"},{"x":4,"y":6,"z":4,"color":"#754627"},{"x":4,"y":7,"z":3,"color":"#754627"},{"x":4,"y":7,"z":4,"color":"#754627"},{"x":4,"y":8,"z":3,"color":"#754627"},{"x":4,"y":8,"z":4,"color":"#754627"},{"x":0,"y":7,"z":0,"color":"#518853"},{"x":0,"y":7,"z":1,"color":"#518853"},{"x":0,"y":7,"z":2,"color":"#518853"},{"x":0,"y":7,"z":3,"color":"#518853"},{"x":0,"y":7,"z":4,"color":"#518853"},{"x":0,"y":7,"z":5,"color":"#518853"},{"x":0,"y":7,"z":6,"color":"#518853"},{"x":0,"y":7,"z":7,"color":"#518853"},{"x":0,"y":8,"z":0,"color":"#518853"},{"x":0,"y":8,"z":1,"color":"#518853"},{"x":0,"y":8,"z":2,"color":"#518853"},{"x":0,"y":8,"z":3,"color":"#518853"},{"x":0,"y":8,"z":4,"color":"#518853"},{"x":0,"y":8,"z":5,"color":"#518853"},{"x":0,"y":8,"z":6,"color":"#518853"},{"x":0,"y":8,"z":7,"color":"#518853"},{"x":0,"y":9,"z":0,"color":"#518853"},{"x":0,"y":9,"z":1,"color":"#518853"},{"x":0,"y":9,"z":2,"color":"#518853"},{"x":0,"y":9,"z":3,"color":"#518853"},{"x":0,"y":9,"z":4,"color":"#518853"},{"x":0,"y":9,"z":5,"color":"#518853"},{"x":0,"y":9,"z":6,"color":"#518853"},{"x":0,"y":9,"z":7,"color":"#518853"},{"x":1,"y":7,"z":0,"color":"#518853"},{"x":1,"y":7,"z":1,"color":"#518853"},{"x":1,"y":7,"z":2,"color":"#518853"},{"x":1,"y":7,"z":3,"color":"#518853"},{"x":1,"y":7,"z":4,"color":"#518853"},{"x":1,"y":7,"z":5,"color":"#518853"},{"x":1,"y":7,"z":6,"color":"#518853"},{"x":1,"y":7,"z":7,"color":"#518853"},{"x":1,"y":8,"z":0,"color":"#518853"},{"x":1,"y":8,"z":1,"color":"#518853"},{"x":1,"y":8,"z":2,"color":"#518853"},{"x":1,"y":8,"z":3,"color":"#518853"},{"x":1,"y":8,"z":4,"color":"#518853"},{"x":1,"y":8,"z":5,"color":"#518853"},{"x":1,"y":8,"z":6,"color":"#518853"},{"x":1,"y":8,"z":7,"color":"#518853"},{"x":1,"y":9,"z":0,"color":"#518853"},{"x":1,"y":9,"z":1,"color":"#518853"},{"x":1,"y":9,"z":2,"color":"#518853"},{"x":1,"y":9,"z":3,"color":"#518853"},{"x":1,"y":9,"z":4,"color":"#518853"},{"x":1,"y":9,"z":5,"color":"#518853"},{"x":1,"y":9,"z":6,"color":"#518853"},{"x":1,"y":9,"z":7,"color":"#518853"},{"x":2,"y":7,"z":0,"color":"#518853"},{"x":2,"y":7,"z":1,"color":"#518853"},{"x":2,"y":7,"z":2,"color":"#518853"},{"x":2,"y":7,"z":3,"color":"#518853"},{"x":2,"y":7,"z":4,"color":"#518853"},{"x":2,"y":7,"z":5,"color":"#518853"},{"x":2,"y":7,"z":6,"color":"#518853"},{"x":2,"y":7,"z":7,"color":"#518853"},{"x":2,"y":8,"z":0,"color":"#518853"},{"x":2,"y":8,"z":1,"color":"#518853"},{"x":2,"y":8,"z":2,"color":"#518853"},{"x":2,"y":8,"z":3,"color":"#518853"},{"x":2,"y":8,"z":4,"color":"#518853"},{"x":2,"y":8,"z":5,"color":"#518853"},{"x":2,"y":8,"z":6,"color":"#518853"},{"x":2,"y":8,"z":7,"color":"#518853"},{"x":2,"y":9,"z":0,"color":"#518853"},{"x":2,"y":9,"z":1,"color":"#518853"},{"x":2,"y":9,"z":2,"color":"#518853"},{"x":2,"y":9,"z":3,"color":"#518853"},{"x":2,"y":9,"z":4,"color":"#518853"},{"x":2,"y":9,"z":5,"color":"#518853"},{"x":2,"y":9,"z":6,"color":"#518853"},{"x":2,"y":9,"z":7,"color":"#518853"},{"x":3,"y":7,"z":0,"color":"#518853"},{"x":3,"y":7,"z":1,"color":"#518853"},{"x":3,"y":7,"z":2,"color":"#518853"},{"x":3,"y":7,"z":5,"color":"#518853"},{"x":3,"y":7,"z":6,"color":"#518853"},{"x":3,"y":7,"z":7,"color":"#518853"},{"x":3,"y":8,"z":0,"color":"#518853"},{"x":3,"y":8,"z":1,"color":"#518853"},{"x":3,"y":8,"z":2,"color":"#518853"},{"x":3,"y":8,"z":5,"color":"#518853"},{"x":3,"y":8,"z":6,"color":"#518853"},{"x":3,"y":8,"z":7,"color":"#518853"},{"x":3,"y":9,"z":0,"color":"#518853"},{"x":3,"y":9,"z":1,"color":"#518853"},{"x":3,"y":9,"z":2,"color":"#518853"},{"x":3,"y":9,"z":3,"color":"#518853"},{"x":3,"y":9,"z":4,"color":"#518853"},{"x":3,"y":9,"z":5,"color":"#518853"},{"x":3,"y":9,"z":6,"color":"#518853"},{"x":3,"y":9,"z":7,"color":"#518853"},{"x":4,"y":7,"z":0,"color":"#518853"},{"x":4,"y":7,"z":1,"color":"#518853"},{"x":4,"y":7,"z":2,"color":"#518853"},{"x":4,"y":7,"z":5,"color":"#518853"},{"x":4,"y":7,"z":6,"color":"#518853"},{"x":4,"y":7,"z":7,"color":"#518853"},{"x":4,"y":8,"z":0,"color":"#518853"},{"x":4,"y":8,"z":1,"color":"#518853"},{"x":4,"y":8,"z":2,"color":"#518853"},{"x":4,"y":8,"z":5,"color":"#518853"},{"x":4,"y":8,"z":6,"color":"#518853"},{"x":4,"y":8,"z":7,"color":"#518853"},{"x":4,"y":9,"z":0,"color":"#518853"},{"x":4,"y":9,"z":1,"color":"#518853"},{"x":4,"y":9,"z":2,"color":"#518853"},{"x":4,"y":9,"z":3,"color":"#518853"},{"x":4,"y":9,"z":4,"color":"#518853"},{"x":4,"y":9,"z":5,"color":"#518853"},{"x":4,"y":9,"z":6,"color":"#518853"},{"x":4,"y":9,"z":7,"color":"#518853"},{"x":5,"y":7,"z":0,"color":"#518853"},{"x":5,"y":7,"z":1,"color":"#518853"},{"x":5,"y":7,"z":2,"color":"#518853"},{"x":5,"y":7,"z":3,"color":"#518853"},{"x":5,"y":7,"z":4,"color":"#518853"},{"x":5,"y":7,"z":5,"color":"#518853"},{"x":5,"y":7,"z":6,"color":"#518853"},{"x":5,"y":7,"z":7,"color":"#518853"},{"x":5,"y":8,"z":0,"color":"#518853"},{"x":5,"y":8,"z":1,"color":"#518853"},{"x":5,"y":8,"z":2,"color":"#518853"},{"x":5,"y":8,"z":3,"color":"#518853"},{"x":5,"y":8,"z":4,"color":"#518853"},{"x":5,"y":8,"z":5,"color":"#518853"},{"x":5,"y":8,"z":6,"color":"#518853"},{"x":5,"y":8,"z":7,"color":"#518853"},{"x":5,"y":9,"z":0,"color":"#518853"},{"x":5,"y":9,"z":1,"color":"#518853"},{"x":5,"y":9,"z":2,"color":"#518853"},{"x":5,"y":9,"z":3,"color":"#518853"},{"x":5,"y":9,"z":4,"color":"#518853"},{"x":5,"y":9,"z":5,"color":"#518853"},{"x":5,"y":9,"z":6,"color":"#518853"},{"x":5,"y":9,"z":7,"color":"#518853"},{"x":6,"y":7,"z":0,"color":"#518853"},{"x":6,"y":7,"z":1,"color":"#518853"},{"x":6,"y":7,"z":2,"color":"#518853"},{"x":6,"y":7,"z":3,"color":"#518853"},{"x":6,"y":7,"z":4,"color":"#518853"},{"x":6,"y":7,"z":5,"color":"#518853"},{"x":6,"y":7,"z":6,"color":"#518853"},{"x":6,"y":7,"z":7,"color":"#518853"},{"x":6,"y":8,"z":0,"color":"#518853"},{"x":6,"y":8,"z":1,"color":"#518853"},{"x":6,"y":8,"z":2,"color":"#518853"},{"x":6,"y":8,"z":3,"color":"#518853"},{"x":6,"y":8,"z":4,"color":"#518853"},{"x":6,"y":8,"z":5,"color":"#518853"},{"x":6,"y":8,"z":6,"color":"#518853"},{"x":6,"y":8,"z":7,"color":"#518853"},{"x":6,"y":9,"z":0,"color":"#518853"},{"x":6,"y":9,"z":1,"color":"#518853"},{"x":6,"y":9,"z":2,"color":"#518853"},{"x":6,"y":9,"z":3,"color":"#518853"},{"x":6,"y":9,"z":4,"color":"#518853"},{"x":6,"y":9,"z":5,"color":"#518853"},{"x":6,"y":9,"z":6,"color":"#518853"},{"x":6,"y":9,"z":7,"color":"#518853"},{"x":7,"y":7,"z":0,"color":"#518853"},{"x":7,"y":7,"z":1,"color":"#518853"},{"x":7,"y":7,"z":2,"color":"#518853"},{"x":7,"y":7,"z":3,"color":"#518853"},{"x":7,"y":7,"z":4,"color":"#518853"},{"x":7,"y":7,"z":5,"color":"#518853"},{"x":7,"y":7,"z":6,"color":"#518853"},{"x":7,"y":7,"z":7,"color":"#518853"},{"x":7,"y":8,"z":0,"color":"#518853"},{"x":7,"y":8,"z":1,"color":"#518853"},{"x":7,"y":8,"z":2,"color":"#518853"},{"x":7,"y":8,"z":3,"color":"#518853"},{"x":7,"y":8,"z":4,"color":"#518853"},{"x":7,"y":8,"z":5,"color":"#518853"},{"x":7,"y":8,"z":6,"color":"#518853"},{"x":7,"y":8,"z":7,"color":"#518853"},{"x":7,"y":9,"z":0,"color":"#518853"},{"x":7,"y":9,"z":1,"color":"#518853"},{"x":7,"y":9,"z":2,"color":"#518853"},{"x":7,"y":9,"z":3,"color":"#518853"},{"x":7,"y":9,"z":4,"color":"#518853"},{"x":7,"y":9,"z":5,"color":"#518853"},{"x":7,"y":9,"z":6,"color":"#518853"},{"x":7,"y":9,"z":7,"color":"#518853"},{"x":1,"y":10,"z":1,"color":"#76a164"},{"x":1,"y":10,"z":2,"color":"#76a164"},{"x":1,"y":10,"z":3,"color":"#76a164"},{"x":1,"y":10,"z":4,"color":"#76a164"},{"x":1,"y":10,"z":5,"color":"#76a164"},{"x":1,"y":10,"z":6,"color":"#76a164"},{"x":1,"y":11,"z":1,"color":"#76a164"},{"x":1,"y":11,"z":2,"color":"#76a164"},{"x":1,"y":11,"z":3,"color":"#76a164"},{"x":1,"y":11,"z":4,"color":"#76a164"},{"x":1,"y":11,"z":5,"color":"#76a164"},{"x":1,"y":11,"z":6,"color":"#76a164"},{"x":1,"y":12,"z":1,"color":"#76a164"},{"x":1,"y":12,"z":2,"color":"#76a164"},{"x":1,"y":12,"z":3,"color":"#76a164"},{"x":1,"y":12,"z":4,"color":"#76a164"},{"x":1,"y":12,"z":5,"color":"#76a164"},{"x":1,"y":12,"z":6,"color":"#76a164"},{"x":2,"y":10,"z":1,"color":"#76a164"},{"x":2,"y":10,"z":2,"color":"#76a164"},{"x":2,"y":10,"z":3,"color":"#76a164"},{"x":2,"y":10,"z":4,"color":"#76a164"},{"x":2,"y":10,"z":5,"color":"#76a164"},{"x":2,"y":10,"z":6,"color":"#76a164"},{"x":2,"y":11,"z":1,"color":"#76a164"},{"x":2,"y":11,"z":2,"color":"#76a164"},{"x":2,"y":11,"z":3,"color":"#76a164"},{"x":2,"y":11,"z":4,"color":"#76a164"},{"x":2,"y":11,"z":5,"color":"#76a164"},{"x":2,"y":11,"z":6,"color":"#76a164"},{"x":2,"y":12,"z":1,"color":"#76a164"},{"x":2,"y":12,"z":2,"color":"#76a164"},{"x":2,"y":12,"z":3,"color":"#76a164"},{"x":2,"y":12,"z":4,"color":"#76a164"},{"x":2,"y":12,"z":5,"color":"#76a164"},{"x":2,"y":12,"z":6,"color":"#76a164"},{"x":3,"y":10,"z":1,"color":"#76a164"},{"x":3,"y":10,"z":2,"color":"#76a164"},{"x":3,"y":10,"z":3,"color":"#76a164"},{"x":3,"y":10,"z":4,"color":"#76a164"},{"x":3,"y":10,"z":5,"color":"#76a164"},{"x":3,"y":10,"z":6,"color":"#76a164"},{"x":3,"y":11,"z":1,"color":"#76a164"},{"x":3,"y":11,"z":2,"color":"#76a164"},{"x":3,"y":11,"z":3,"color":"#76a164"},{"x":3,"y":11,"z":4,"color":"#76a164"},{"x":3,"y":11,"z":5,"color":"#76a164"},{"x":3,"y":11,"z":6,"color":"#76a164"},{"x":3,"y":12,"z":1,"color":"#76a164"},{"x":3,"y":12,"z":2,"color":"#76a164"},{"x":3,"y":12,"z":3,"color":"#76a164"},{"x":3,"y":12,"z":4,"color":"#76a164"},{"x":3,"y":12,"z":5,"color":"#76a164"},{"x":3,"y":12,"z":6,"color":"#76a164"},{"x":4,"y":10,"z":1,"color":"#76a164"},{"x":4,"y":10,"z":2,"color":"#76a164"},{"x":4,"y":10,"z":3,"color":"#76a164"},{"x":4,"y":10,"z":4,"color":"#76a164"},{"x":4,"y":10,"z":5,"color":"#76a164"},{"x":4,"y":10,"z":6,"color":"#76a164"},{"x":4,"y":11,"z":1,"color":"#76a164"},{"x":4,"y":11,"z":2,"color":"#76a164"},{"x":4,"y":11,"z":3,"color":"#76a164"},{"x":4,"y":11,"z":4,"color":"#76a164"},{"x":4,"y":11,"z":5,"color":"#76a164"},{"x":4,"y":11,"z":6,"color":"#76a164"},{"x":4,"y":12,"z":1,"color":"#76a164"},{"x":4,"y":12,"z":2,"color":"#76a164"},{"x":4,"y":12,"z":3,"color":"#76a164"},{"x":4,"y":12,"z":4,"color":"#76a164"},{"x":4,"y":12,"z":5,"color":"#76a164"},{"x":4,"y":12,"z":6,"color":"#76a164"},{"x":5,"y":10,"z":1,"color":"#76a164"},{"x":5,"y":10,"z":2,"color":"#76a164"},{"x":5,"y":10,"z":3,"color":"#76a164"},{"x":5,"y":10,"z":4,"color":"#76a164"},{"x":5,"y":10,"z":5,"color":"#76a164"},{"x":5,"y":10,"z":6,"color":"#76a164"},{"x":5,"y":11,"z":1,"color":"#76a164"},{"x":5,"y":11,"z":2,"color":"#76a164"},{"x":5,"y":11,"z":3,"color":"#76a164"},{"x":5,"y":11,"z":4,"color":"#76a164"},{"x":5,"y":11,"z":5,"color":"#76a164"},{"x":5,"y":11,"z":6,"color":"#76a164"},{"x":5,"y":12,"z":1,"color":"#76a164"},{"x":5,"y":12,"z":2,"color":"#76a164"},{"x":5,"y":12,"z":3,"color":"#76a164"},{"x":5,"y":12,"z":4,"color":"#76a164"},{"x":5,"y":12,"z":5,"color":"#76a164"},{"x":5,"y":12,"z":6,"color":"#76a164"},{"x":6,"y":10,"z":1,"color":"#76a164"},{"x":6,"y":10,"z":2,"color":"#76a164"},{"x":6,"y":10,"z":3,"color":"#76a164"},{"x":6,"y":10,"z":4,"color":"#76a164"},{"x":6,"y":10,"z":5,"color":"#76a164"},{"x":6,"y":10,"z":6,"color":"#76a164"},{"x":6,"y":11,"z":1,"color":"#76a164"},{"x":6,"y":11,"z":2,"color":"#76a164"},{"x":6,"y":11,"z":3,"color":"#76a164"},{"x":6,"y":11,"z":4,"color":"#76a164"},{"x":6,"y":11,"z":5,"color":"#76a164"},{"x":6,"y":11,"z":6,"color":"#76a164"},{"x":6,"y":12,"z":1,"color":"#76a164"},{"x":6,"y":12,"z":2,"color":"#76a164"},{"x":6,"y":12,"z":3,"color":"#76a164"},{"x":6,"y":12,"z":4,"color":"#76a164"},{"x":6,"y":12,"z":5,"color":"#76a164"},{"x":6,"y":12,"z":6,"color":"#76a164"}],"poses":[]},{"id":"house","name":"Cottage","width":16,"height":16,"depth":16,"cubes":[{"x":0,"y":0,"z":0,"color":"#e9b18b"},{"x":0,"y":0,"z":1,"color":"#e9b18b"},{"x":0,"y":0,"z":2,"color":"#e9b18b"},{"x":0,"y":0,"z":3,"color":"#e9b18b"},{"x":0,"y":0,"z":4,"color":"#e9b18b"},{"x":0,"y":0,"z":5,"color":"#e9b18b"},{"x":0,"y":0,"z":6,"color":"#e9b18b"},{"x":0,"y":0,"z":7,"color":"#e9b18b"},{"x":0,"y":0,"z":8,"color":"#e9b18b"},{"x":0,"y":1,"z":0,"color":"#e9b18b"},{"x":0,"y":1,"z":1,"color":"#e9b18b"},{"x":0,"y":1,"z":2,"color":"#e9b18b"},{"x":0,"y":1,"z":3,"color":"#e9b18b"},{"x":0,"y":1,"z":4,"color":"#e9b18b"},{"x":0,"y":1,"z":5,"color":"#e9b18b"},{"x":0,"y":1,"z":6,"color":"#e9b18b"},{"x":0,"y":1,"z":7,"color":"#e9b18b"},{"x":0,"y":1,"z":8,"color":"#e9b18b"},{"x":0,"y":2,"z":0,"color":"#e9b18b"},{"x":0,"y":2,"z":1,"color":"#e9b18b"},{"x":0,"y":2,"z":2,"color":"#e9b18b"},{"x":0,"y":2,"z":3,"color":"#e9b18b"},{"x":0,"y":2,"z":4,"color":"#e9b18b"},{"x":0,"y":2,"z":5,"color":"#e9b18b"},{"x":0,"y":2,"z":6,"color":"#e9b18b"},{"x":0,"y":2,"z":7,"color":"#e9b18b"},{"x":0,"y":2,"z":8,"color":"#e9b18b"},{"x":0,"y":3,"z":0,"color":"#e9b18b"},{"x":0,"y":3,"z":1,"color":"#e9b18b"},{"x":0,"y":3,"z":2,"color":"#e9b18b"},{"x":0,"y":3,"z":3,"color":"#e9b18b"},{"x":0,"y":3,"z":4,"color":"#e9b18b"},{"x":0,"y":3,"z":5,"color":"#e9b18b"},{"x":0,"y":3,"z":6,"color":"#e9b18b"},{"x":0,"y":3,"z":7,"color":"#e9b18b"},{"x":0,"y":3,"z":8,"color":"#e9b18b"},{"x":0,"y":4,"z":0,"color":"#e9b18b"},{"x":0,"y":4,"z":1,"color":"#e9b18b"},{"x":0,"y":4,"z":2,"color":"#e9b18b"},{"x":0,"y":4,"z":3,"color":"#e9b18b"},{"x":0,"y":4,"z":4,"color":"#e9b18b"},{"x":0,"y":4,"z":5,"color":"#e9b18b"},{"x":0,"y":4,"z":6,"color":"#e9b18b"},{"x":0,"y":4,"z":7,"color":"#e9b18b"},{"x":0,"y":4,"z":8,"color":"#e9b18b"},{"x":0,"y":5,"z":0,"color":"#e9b18b"},{"x":0,"y":5,"z":1,"color":"#e9b18b"},{"x":0,"y":5,"z":2,"color":"#e9b18b"},{"x":0,"y":5,"z":3,"color":"#e9b18b"},{"x":0,"y":5,"z":4,"color":"#e9b18b"},{"x":0,"y":5,"z":5,"color":"#e9b18b"},{"x":0,"y":5,"z":6,"color":"#e9b18b"},{"x":0,"y":5,"z":7,"color":"#e9b18b"},{"x":0,"y":5,"z":8,"color":"#e9b18b"},{"x":0,"y":6,"z":0,"color":"#e9b18b"},{"x":0,"y":6,"z":1,"color":"#e9b18b"},{"x":0,"y":6,"z":2,"color":"#e9b18b"},{"x":0,"y":6,"z":3,"color":"#e9b18b"},{"x":0,"y":6,"z":4,"color":"#e9b18b"},{"x":0,"y":6,"z":5,"color":"#e9b18b"},{"x":0,"y":6,"z":6,"color":"#e9b18b"},{"x":0,"y":6,"z":7,"color":"#e9b18b"},{"x":0,"y":6,"z":8,"color":"#e9b18b"},{"x":0,"y":7,"z":0,"color":"#e9b18b"},{"x":0,"y":7,"z":1,"color":"#e9b18b"},{"x":0,"y":7,"z":2,"color":"#e9b18b"},{"x":0,"y":7,"z":3,"color":"#e9b18b"},{"x":0,"y":7,"z":4,"color":"#e9b18b"},{"x":0,"y":7,"z":5,"color":"#e9b18b"},{"x":0,"y":7,"z":6,"color":"#e9b18b"},{"x":0,"y":7,"z":7,"color":"#e9b18b"},{"x":0,"y":7,"z":8,"color":"#e9b18b"},{"x":1,"y":0,"z":0,"color":"#e9b18b"},{"x":1,"y":0,"z":1,"color":"#e9b18b"},{"x":1,"y":0,"z":2,"color":"#e9b18b"},{"x":1,"y":0,"z":3,"color":"#e9b18b"},{"x":1,"y":0,"z":4,"color":"#e9b18b"},{"x":1,"y":0,"z":5,"color":"#e9b18b"},{"x":1,"y":0,"z":6,"color":"#e9b18b"},{"x":1,"y":0,"z":7,"color":"#e9b18b"},{"x":1,"y":0,"z":8,"color":"#e9b18b"},{"x":1,"y":1,"z":0,"color":"#e9b18b"},{"x":1,"y":1,"z":1,"color":"#e9b18b"},{"x":1,"y":1,"z":2,"color":"#e9b18b"},{"x":1,"y":1,"z":3,"color":"#e9b18b"},{"x":1,"y":1,"z":4,"color":"#e9b18b"},{"x":1,"y":1,"z":5,"color":"#e9b18b"},{"x":1,"y":1,"z":6,"color":"#e9b18b"},{"x":1,"y":1,"z":7,"color":"#e9b18b"},{"x":1,"y":1,"z":8,"color":"#e9b18b"},{"x":1,"y":2,"z":0,"color":"#e9b18b"},{"x":1,"y":2,"z":1,"color":"#e9b18b"},{"x":1,"y":2,"z":2,"color":"#e9b18b"},{"x":1,"y":2,"z":3,"color":"#e9b18b"},{"x":1,"y":2,"z":4,"color":"#e9b18b"},{"x":1,"y":2,"z":5,"color":"#e9b18b"},{"x":1,"y":2,"z":6,"color":"#e9b18b"},{"x":1,"y":2,"z":7,"color":"#e9b18b"},{"x":1,"y":2,"z":8,"color":"#e9b18b"},{"x":1,"y":3,"z":0,"color":"#e9b18b"},{"x":1,"y":3,"z":1,"color":"#e9b18b"},{"x":1,"y":3,"z":2,"color":"#e9b18b"},{"x":1,"y":3,"z":3,"color":"#e9b18b"},{"x":1,"y":3,"z":4,"color":"#e9b18b"},{"x":1,"y":3,"z":5,"color":"#e9b18b"},{"x":1,"y":3,"z":6,"color":"#e9b18b"},{"x":1,"y":3,"z":7,"color":"#e9b18b"},{"x":1,"y":3,"z":8,"color":"#e9b18b"},{"x":1,"y":4,"z":0,"color":"#e9b18b"},{"x":1,"y":4,"z":1,"color":"#e9b18b"},{"x":1,"y":4,"z":2,"color":"#e9b18b"},{"x":1,"y":4,"z":3,"color":"#e9b18b"},{"x":1,"y":4,"z":4,"color":"#e9b18b"},{"x":1,"y":4,"z":5,"color":"#e9b18b"},{"x":1,"y":4,"z":6,"color":"#e9b18b"},{"x":1,"y":4,"z":7,"color":"#e9b18b"},{"x":1,"y":4,"z":8,"color":"#e9b18b"},{"x":1,"y":5,"z":0,"color":"#e9b18b"},{"x":1,"y":5,"z":1,"color":"#e9b18b"},{"x":1,"y":5,"z":2,"color":"#e9b18b"},{"x":1,"y":5,"z":3,"color":"#e9b18b"},{"x":1,"y":5,"z":4,"color":"#e9b18b"},{"x":1,"y":5,"z":5,"color":"#e9b18b"},{"x":1,"y":5,"z":6,"color":"#e9b18b"},{"x":1,"y":5,"z":7,"color":"#e9b18b"},{"x":1,"y":5,"z":8,"color":"#e9b18b"},{"x":1,"y":6,"z":0,"color":"#e9b18b"},{"x":1,"y":6,"z":1,"color":"#e9b18b"},{"x":1,"y":6,"z":2,"color":"#e9b18b"},{"x":1,"y":6,"z":3,"color":"#e9b18b"},{"x":1,"y":6,"z":4,"color":"#e9b18b"},{"x":1,"y":6,"z":5,"color":"#e9b18b"},{"x":1,"y":6,"z":6,"color":"#e9b18b"},{"x":1,"y":6,"z":7,"color":"#e9b18b"},{"x":1,"y":6,"z":8,"color":"#e9b18b"},{"x":1,"y":7,"z":0,"color":"#e9b18b"},{"x":1,"y":7,"z":1,"color":"#e9b18b"},{"x":1,"y":7,"z":2,"color":"#e9b18b"},{"x":1,"y":7,"z":3,"color":"#e9b18b"},{"x":1,"y":7,"z":4,"color":"#e9b18b"},{"x":1,"y":7,"z":5,"color":"#e9b18b"},{"x":1,"y":7,"z":6,"color":"#e9b18b"},{"x":1,"y":7,"z":7,"color":"#e9b18b"},{"x":1,"y":7,"z":8,"color":"#e9b18b"},{"x":2,"y":0,"z":0,"color":"#e9b18b"},{"x":2,"y":0,"z":1,"color":"#e9b18b"},{"x":2,"y":0,"z":2,"color":"#e9b18b"},{"x":2,"y":0,"z":3,"color":"#e9b18b"},{"x":2,"y":0,"z":4,"color":"#e9b18b"},{"x":2,"y":0,"z":5,"color":"#e9b18b"},{"x":2,"y":0,"z":6,"color":"#e9b18b"},{"x":2,"y":0,"z":7,"color":"#e9b18b"},{"x":2,"y":0,"z":8,"color":"#e9b18b"},{"x":2,"y":1,"z":0,"color":"#e9b18b"},{"x":2,"y":1,"z":1,"color":"#e9b18b"},{"x":2,"y":1,"z":2,"color":"#e9b18b"},{"x":2,"y":1,"z":3,"color":"#e9b18b"},{"x":2,"y":1,"z":4,"color":"#e9b18b"},{"x":2,"y":1,"z":5,"color":"#e9b18b"},{"x":2,"y":1,"z":6,"color":"#e9b18b"},{"x":2,"y":1,"z":7,"color":"#e9b18b"},{"x":2,"y":1,"z":8,"color":"#e9b18b"},{"x":2,"y":2,"z":0,"color":"#e9b18b"},{"x":2,"y":2,"z":1,"color":"#e9b18b"},{"x":2,"y":2,"z":2,"color":"#e9b18b"},{"x":2,"y":2,"z":3,"color":"#e9b18b"},{"x":2,"y":2,"z":4,"color":"#e9b18b"},{"x":2,"y":2,"z":5,"color":"#e9b18b"},{"x":2,"y":2,"z":6,"color":"#e9b18b"},{"x":2,"y":2,"z":7,"color":"#e9b18b"},{"x":2,"y":2,"z":8,"color":"#e9b18b"},{"x":2,"y":3,"z":0,"color":"#e9b18b"},{"x":2,"y":3,"z":1,"color":"#e9b18b"},{"x":2,"y":3,"z":2,"color":"#e9b18b"},{"x":2,"y":3,"z":3,"color":"#e9b18b"},{"x":2,"y":3,"z":4,"color":"#e9b18b"},{"x":2,"y":3,"z":5,"color":"#e9b18b"},{"x":2,"y":3,"z":6,"color":"#e9b18b"},{"x":2,"y":3,"z":7,"color":"#e9b18b"},{"x":2,"y":3,"z":8,"color":"#e9b18b"},{"x":2,"y":4,"z":0,"color":"#e9b18b"},{"x":2,"y":4,"z":1,"color":"#e9b18b"},{"x":2,"y":4,"z":2,"color":"#e9b18b"},{"x":2,"y":4,"z":3,"color":"#e9b18b"},{"x":2,"y":4,"z":4,"color":"#e9b18b"},{"x":2,"y":4,"z":5,"color":"#e9b18b"},{"x":2,"y":4,"z":6,"color":"#e9b18b"},{"x":2,"y":4,"z":7,"color":"#e9b18b"},{"x":2,"y":4,"z":8,"color":"#e9b18b"},{"x":2,"y":5,"z":0,"color":"#e9b18b"},{"x":2,"y":5,"z":1,"color":"#e9b18b"},{"x":2,"y":5,"z":2,"color":"#e9b18b"},{"x":2,"y":5,"z":3,"color":"#e9b18b"},{"x":2,"y":5,"z":4,"color":"#e9b18b"},{"x":2,"y":5,"z":5,"color":"#e9b18b"},{"x":2,"y":5,"z":6,"color":"#e9b18b"},{"x":2,"y":5,"z":7,"color":"#e9b18b"},{"x":2,"y":5,"z":8,"color":"#e9b18b"},{"x":2,"y":6,"z":0,"color":"#e9b18b"},{"x":2,"y":6,"z":1,"color":"#e9b18b"},{"x":2,"y":6,"z":2,"color":"#e9b18b"},{"x":2,"y":6,"z":3,"color":"#e9b18b"},{"x":2,"y":6,"z":4,"color":"#e9b18b"},{"x":2,"y":6,"z":5,"color":"#e9b18b"},{"x":2,"y":6,"z":6,"color":"#e9b18b"},{"x":2,"y":6,"z":7,"color":"#e9b18b"},{"x":2,"y":6,"z":8,"color":"#e9b18b"},{"x":2,"y":7,"z":0,"color":"#e9b18b"},{"x":2,"y":7,"z":1,"color":"#e9b18b"},{"x":2,"y":7,"z":2,"color":"#e9b18b"},{"x":2,"y":7,"z":3,"color":"#e9b18b"},{"x":2,"y":7,"z":4,"color":"#e9b18b"},{"x":2,"y":7,"z":5,"color":"#e9b18b"},{"x":2,"y":7,"z":6,"color":"#e9b18b"},{"x":2,"y":7,"z":7,"color":"#e9b18b"},{"x":2,"y":7,"z":8,"color":"#e9b18b"},{"x":3,"y":0,"z":0,"color":"#e9b18b"},{"x":3,"y":0,"z":1,"color":"#e9b18b"},{"x":3,"y":0,"z":2,"color":"#e9b18b"},{"x":3,"y":0,"z":3,"color":"#e9b18b"},{"x":3,"y":0,"z":4,"color":"#e9b18b"},{"x":3,"y":0,"z":5,"color":"#e9b18b"},{"x":3,"y":0,"z":6,"color":"#e9b18b"},{"x":3,"y":0,"z":7,"color":"#e9b18b"},{"x":3,"y":0,"z":8,"color":"#e9b18b"},{"x":3,"y":1,"z":0,"color":"#e9b18b"},{"x":3,"y":1,"z":1,"color":"#e9b18b"},{"x":3,"y":1,"z":2,"color":"#e9b18b"},{"x":3,"y":1,"z":3,"color":"#e9b18b"},{"x":3,"y":1,"z":4,"color":"#e9b18b"},{"x":3,"y":1,"z":5,"color":"#e9b18b"},{"x":3,"y":1,"z":6,"color":"#e9b18b"},{"x":3,"y":1,"z":7,"color":"#e9b18b"},{"x":3,"y":1,"z":8,"color":"#e9b18b"},{"x":3,"y":2,"z":0,"color":"#e9b18b"},{"x":3,"y":2,"z":1,"color":"#e9b18b"},{"x":3,"y":2,"z":2,"color":"#e9b18b"},{"x":3,"y":2,"z":3,"color":"#e9b18b"},{"x":3,"y":2,"z":4,"color":"#e9b18b"},{"x":3,"y":2,"z":5,"color":"#e9b18b"},{"x":3,"y":2,"z":6,"color":"#e9b18b"},{"x":3,"y":2,"z":7,"color":"#e9b18b"},{"x":3,"y":2,"z":8,"color":"#e9b18b"},{"x":3,"y":3,"z":0,"color":"#e9b18b"},{"x":3,"y":3,"z":1,"color":"#e9b18b"},{"x":3,"y":3,"z":2,"color":"#e9b18b"},{"x":3,"y":3,"z":3,"color":"#e9b18b"},{"x":3,"y":3,"z":4,"color":"#e9b18b"},{"x":3,"y":3,"z":5,"color":"#e9b18b"},{"x":3,"y":3,"z":6,"color":"#e9b18b"},{"x":3,"y":3,"z":7,"color":"#e9b18b"},{"x":3,"y":3,"z":8,"color":"#e9b18b"},{"x":3,"y":4,"z":0,"color":"#e9b18b"},{"x":3,"y":4,"z":1,"color":"#e9b18b"},{"x":3,"y":4,"z":2,"color":"#e9b18b"},{"x":3,"y":4,"z":3,"color":"#e9b18b"},{"x":3,"y":4,"z":4,"color":"#e9b18b"},{"x":3,"y":4,"z":5,"color":"#e9b18b"},{"x":3,"y":4,"z":6,"color":"#e9b18b"},{"x":3,"y":4,"z":7,"color":"#e9b18b"},{"x":3,"y":4,"z":8,"color":"#e9b18b"},{"x":3,"y":5,"z":0,"color":"#e9b18b"},{"x":3,"y":5,"z":1,"color":"#e9b18b"},{"x":3,"y":5,"z":2,"color":"#e9b18b"},{"x":3,"y":5,"z":3,"color":"#e9b18b"},{"x":3,"y":5,"z":4,"color":"#e9b18b"},{"x":3,"y":5,"z":5,"color":"#e9b18b"},{"x":3,"y":5,"z":6,"color":"#e9b18b"},{"x":3,"y":5,"z":7,"color":"#e9b18b"},{"x":3,"y":5,"z":8,"color":"#e9b18b"},{"x":3,"y":6,"z":0,"color":"#e9b18b"},{"x":3,"y":6,"z":1,"color":"#e9b18b"},{"x":3,"y":6,"z":2,"color":"#e9b18b"},{"x":3,"y":6,"z":3,"color":"#e9b18b"},{"x":3,"y":6,"z":4,"color":"#e9b18b"},{"x":3,"y":6,"z":5,"color":"#e9b18b"},{"x":3,"y":6,"z":6,"color":"#e9b18b"},{"x":3,"y":6,"z":7,"color":"#e9b18b"},{"x":3,"y":6,"z":8,"color":"#e9b18b"},{"x":3,"y":7,"z":0,"color":"#e9b18b"},{"x":3,"y":7,"z":1,"color":"#e9b18b"},{"x":3,"y":7,"z":2,"color":"#e9b18b"},{"x":3,"y":7,"z":3,"color":"#e9b18b"},{"x":3,"y":7,"z":4,"color":"#e9b18b"},{"x":3,"y":7,"z":5,"color":"#e9b18b"},{"x":3,"y":7,"z":6,"color":"#e9b18b"},{"x":3,"y":7,"z":7,"color":"#e9b18b"},{"x":3,"y":7,"z":8,"color":"#e9b18b"},{"x":4,"y":0,"z":0,"color":"#e9b18b"},{"x":4,"y":0,"z":1,"color":"#e9b18b"},{"x":4,"y":0,"z":2,"color":"#e9b18b"},{"x":4,"y":0,"z":3,"color":"#e9b18b"},{"x":4,"y":0,"z":4,"color":"#e9b18b"},{"x":4,"y":0,"z":5,"color":"#e9b18b"},{"x":4,"y":0,"z":6,"color":"#e9b18b"},{"x":4,"y":0,"z":7,"color":"#e9b18b"},{"x":4,"y":0,"z":8,"color":"#e9b18b"},{"x":4,"y":1,"z":0,"color":"#e9b18b"},{"x":4,"y":1,"z":1,"color":"#e9b18b"},{"x":4,"y":1,"z":2,"color":"#e9b18b"},{"x":4,"y":1,"z":3,"color":"#e9b18b"},{"x":4,"y":1,"z":4,"color":"#e9b18b"},{"x":4,"y":1,"z":5,"color":"#e9b18b"},{"x":4,"y":1,"z":6,"color":"#e9b18b"},{"x":4,"y":1,"z":7,"color":"#e9b18b"},{"x":4,"y":1,"z":8,"color":"#e9b18b"},{"x":4,"y":2,"z":0,"color":"#e9b18b"},{"x":4,"y":2,"z":1,"color":"#e9b18b"},{"x":4,"y":2,"z":2,"color":"#e9b18b"},{"x":4,"y":2,"z":3,"color":"#e9b18b"},{"x":4,"y":2,"z":4,"color":"#e9b18b"},{"x":4,"y":2,"z":5,"color":"#e9b18b"},{"x":4,"y":2,"z":6,"color":"#e9b18b"},{"x":4,"y":2,"z":7,"color":"#e9b18b"},{"x":4,"y":2,"z":8,"color":"#e9b18b"},{"x":4,"y":3,"z":0,"color":"#e9b18b"},{"x":4,"y":3,"z":1,"color":"#e9b18b"},{"x":4,"y":3,"z":2,"color":"#e9b18b"},{"x":4,"y":3,"z":3,"color":"#e9b18b"},{"x":4,"y":3,"z":4,"color":"#e9b18b"},{"x":4,"y":3,"z":5,"color":"#e9b18b"},{"x":4,"y":3,"z":6,"color":"#e9b18b"},{"x":4,"y":3,"z":7,"color":"#e9b18b"},{"x":4,"y":3,"z":8,"color":"#e9b18b"},{"x":4,"y":4,"z":0,"color":"#e9b18b"},{"x":4,"y":4,"z":1,"color":"#e9b18b"},{"x":4,"y":4,"z":2,"color":"#e9b18b"},{"x":4,"y":4,"z":3,"color":"#e9b18b"},{"x":4,"y":4,"z":4,"color":"#e9b18b"},{"x":4,"y":4,"z":5,"color":"#e9b18b"},{"x":4,"y":4,"z":6,"color":"#e9b18b"},{"x":4,"y":4,"z":7,"color":"#e9b18b"},{"x":4,"y":4,"z":8,"color":"#e9b18b"},{"x":4,"y":5,"z":0,"color":"#e9b18b"},{"x":4,"y":5,"z":1,"color":"#e9b18b"},{"x":4,"y":5,"z":2,"color":"#e9b18b"},{"x":4,"y":5,"z":3,"color":"#e9b18b"},{"x":4,"y":5,"z":4,"color":"#e9b18b"},{"x":4,"y":5,"z":5,"color":"#e9b18b"},{"x":4,"y":5,"z":6,"color":"#e9b18b"},{"x":4,"y":5,"z":7,"color":"#e9b18b"},{"x":4,"y":5,"z":8,"color":"#e9b18b"},{"x":4,"y":6,"z":0,"color":"#e9b18b"},{"x":4,"y":6,"z":1,"color":"#e9b18b"},{"x":4,"y":6,"z":2,"color":"#e9b18b"},{"x":4,"y":6,"z":3,"color":"#e9b18b"},{"x":4,"y":6,"z":4,"color":"#e9b18b"},{"x":4,"y":6,"z":5,"color":"#e9b18b"},{"x":4,"y":6,"z":6,"color":"#e9b18b"},{"x":4,"y":6,"z":7,"color":"#e9b18b"},{"x":4,"y":6,"z":8,"color":"#e9b18b"},{"x":4,"y":7,"z":0,"color":"#e9b18b"},{"x":4,"y":7,"z":1,"color":"#e9b18b"},{"x":4,"y":7,"z":2,"color":"#e9b18b"},{"x":4,"y":7,"z":3,"color":"#e9b18b"},{"x":4,"y":7,"z":4,"color":"#e9b18b"},{"x":4,"y":7,"z":5,"color":"#e9b18b"},{"x":4,"y":7,"z":6,"color":"#e9b18b"},{"x":4,"y":7,"z":7,"color":"#e9b18b"},{"x":4,"y":7,"z":8,"color":"#e9b18b"},{"x":5,"y":0,"z":0,"color":"#e9b18b"},{"x":5,"y":0,"z":1,"color":"#e9b18b"},{"x":5,"y":0,"z":2,"color":"#e9b18b"},{"x":5,"y":0,"z":3,"color":"#e9b18b"},{"x":5,"y":0,"z":4,"color":"#e9b18b"},{"x":5,"y":0,"z":5,"color":"#e9b18b"},{"x":5,"y":0,"z":6,"color":"#e9b18b"},{"x":5,"y":0,"z":7,"color":"#e9b18b"},{"x":5,"y":0,"z":8,"color":"#e9b18b"},{"x":5,"y":1,"z":0,"color":"#e9b18b"},{"x":5,"y":1,"z":1,"color":"#e9b18b"},{"x":5,"y":1,"z":2,"color":"#e9b18b"},{"x":5,"y":1,"z":3,"color":"#e9b18b"},{"x":5,"y":1,"z":4,"color":"#e9b18b"},{"x":5,"y":1,"z":5,"color":"#e9b18b"},{"x":5,"y":1,"z":6,"color":"#e9b18b"},{"x":5,"y":1,"z":7,"color":"#e9b18b"},{"x":5,"y":1,"z":8,"color":"#e9b18b"},{"x":5,"y":2,"z":0,"color":"#e9b18b"},{"x":5,"y":2,"z":1,"color":"#e9b18b"},{"x":5,"y":2,"z":2,"color":"#e9b18b"},{"x":5,"y":2,"z":3,"color":"#e9b18b"},{"x":5,"y":2,"z":4,"color":"#e9b18b"},{"x":5,"y":2,"z":5,"color":"#e9b18b"},{"x":5,"y":2,"z":6,"color":"#e9b18b"},{"x":5,"y":2,"z":7,"color":"#e9b18b"},{"x":5,"y":2,"z":8,"color":"#e9b18b"},{"x":5,"y":3,"z":0,"color":"#e9b18b"},{"x":5,"y":3,"z":1,"color":"#e9b18b"},{"x":5,"y":3,"z":2,"color":"#e9b18b"},{"x":5,"y":3,"z":3,"color":"#e9b18b"},{"x":5,"y":3,"z":4,"color":"#e9b18b"},{"x":5,"y":3,"z":5,"color":"#e9b18b"},{"x":5,"y":3,"z":6,"color":"#e9b18b"},{"x":5,"y":3,"z":7,"color":"#e9b18b"},{"x":5,"y":3,"z":8,"color":"#e9b18b"},{"x":5,"y":4,"z":0,"color":"#e9b18b"},{"x":5,"y":4,"z":1,"color":"#e9b18b"},{"x":5,"y":4,"z":2,"color":"#e9b18b"},{"x":5,"y":4,"z":3,"color":"#e9b18b"},{"x":5,"y":4,"z":4,"color":"#e9b18b"},{"x":5,"y":4,"z":5,"color":"#e9b18b"},{"x":5,"y":4,"z":6,"color":"#e9b18b"},{"x":5,"y":4,"z":7,"color":"#e9b18b"},{"x":5,"y":4,"z":8,"color":"#e9b18b"},{"x":5,"y":5,"z":0,"color":"#e9b18b"},{"x":5,"y":5,"z":1,"color":"#e9b18b"},{"x":5,"y":5,"z":2,"color":"#e9b18b"},{"x":5,"y":5,"z":3,"color":"#e9b18b"},{"x":5,"y":5,"z":4,"color":"#e9b18b"},{"x":5,"y":5,"z":5,"color":"#e9b18b"},{"x":5,"y":5,"z":6,"color":"#e9b18b"},{"x":5,"y":5,"z":7,"color":"#e9b18b"},{"x":5,"y":5,"z":8,"color":"#e9b18b"},{"x":5,"y":6,"z":0,"color":"#e9b18b"},{"x":5,"y":6,"z":1,"color":"#e9b18b"},{"x":5,"y":6,"z":2,"color":"#e9b18b"},{"x":5,"y":6,"z":3,"color":"#e9b18b"},{"x":5,"y":6,"z":4,"color":"#e9b18b"},{"x":5,"y":6,"z":5,"color":"#e9b18b"},{"x":5,"y":6,"z":6,"color":"#e9b18b"},{"x":5,"y":6,"z":7,"color":"#e9b18b"},{"x":5,"y":6,"z":8,"color":"#e9b18b"},{"x":5,"y":7,"z":0,"color":"#e9b18b"},{"x":5,"y":7,"z":1,"color":"#e9b18b"},{"x":5,"y":7,"z":2,"color":"#e9b18b"},{"x":5,"y":7,"z":3,"color":"#e9b18b"},{"x":5,"y":7,"z":4,"color":"#e9b18b"},{"x":5,"y":7,"z":5,"color":"#e9b18b"},{"x":5,"y":7,"z":6,"color":"#e9b18b"},{"x":5,"y":7,"z":7,"color":"#e9b18b"},{"x":5,"y":7,"z":8,"color":"#e9b18b"},{"x":6,"y":0,"z":0,"color":"#e9b18b"},{"x":6,"y":0,"z":1,"color":"#e9b18b"},{"x":6,"y":0,"z":2,"color":"#e9b18b"},{"x":6,"y":0,"z":3,"color":"#e9b18b"},{"x":6,"y":0,"z":4,"color":"#e9b18b"},{"x":6,"y":0,"z":5,"color":"#e9b18b"},{"x":6,"y":0,"z":6,"color":"#e9b18b"},{"x":6,"y":0,"z":7,"color":"#e9b18b"},{"x":6,"y":0,"z":8,"color":"#e9b18b"},{"x":6,"y":1,"z":0,"color":"#e9b18b"},{"x":6,"y":1,"z":1,"color":"#e9b18b"},{"x":6,"y":1,"z":2,"color":"#e9b18b"},{"x":6,"y":1,"z":3,"color":"#e9b18b"},{"x":6,"y":1,"z":4,"color":"#e9b18b"},{"x":6,"y":1,"z":5,"color":"#e9b18b"},{"x":6,"y":1,"z":6,"color":"#e9b18b"},{"x":6,"y":1,"z":7,"color":"#e9b18b"},{"x":6,"y":1,"z":8,"color":"#e9b18b"},{"x":6,"y":2,"z":0,"color":"#e9b18b"},{"x":6,"y":2,"z":1,"color":"#e9b18b"},{"x":6,"y":2,"z":2,"color":"#e9b18b"},{"x":6,"y":2,"z":3,"color":"#e9b18b"},{"x":6,"y":2,"z":4,"color":"#e9b18b"},{"x":6,"y":2,"z":5,"color":"#e9b18b"},{"x":6,"y":2,"z":6,"color":"#e9b18b"},{"x":6,"y":2,"z":7,"color":"#e9b18b"},{"x":6,"y":2,"z":8,"color":"#e9b18b"},{"x":6,"y":3,"z":0,"color":"#e9b18b"},{"x":6,"y":3,"z":1,"color":"#e9b18b"},{"x":6,"y":3,"z":2,"color":"#e9b18b"},{"x":6,"y":3,"z":3,"color":"#e9b18b"},{"x":6,"y":3,"z":4,"color":"#e9b18b"},{"x":6,"y":3,"z":5,"color":"#e9b18b"},{"x":6,"y":3,"z":6,"color":"#e9b18b"},{"x":6,"y":3,"z":7,"color":"#e9b18b"},{"x":6,"y":3,"z":8,"color":"#e9b18b"},{"x":6,"y":4,"z":0,"color":"#e9b18b"},{"x":6,"y":4,"z":1,"color":"#e9b18b"},{"x":6,"y":4,"z":2,"color":"#e9b18b"},{"x":6,"y":4,"z":3,"color":"#e9b18b"},{"x":6,"y":4,"z":4,"color":"#e9b18b"},{"x":6,"y":4,"z":5,"color":"#e9b18b"},{"x":6,"y":4,"z":6,"color":"#e9b18b"},{"x":6,"y":4,"z":7,"color":"#e9b18b"},{"x":6,"y":4,"z":8,"color":"#e9b18b"},{"x":6,"y":5,"z":0,"color":"#e9b18b"},{"x":6,"y":5,"z":1,"color":"#e9b18b"},{"x":6,"y":5,"z":2,"color":"#e9b18b"},{"x":6,"y":5,"z":3,"color":"#e9b18b"},{"x":6,"y":5,"z":4,"color":"#e9b18b"},{"x":6,"y":5,"z":5,"color":"#e9b18b"},{"x":6,"y":5,"z":6,"color":"#e9b18b"},{"x":6,"y":5,"z":7,"color":"#e9b18b"},{"x":6,"y":5,"z":8,"color":"#e9b18b"},{"x":6,"y":6,"z":0,"color":"#e9b18b"},{"x":6,"y":6,"z":1,"color":"#e9b18b"},{"x":6,"y":6,"z":2,"color":"#e9b18b"},{"x":6,"y":6,"z":3,"color":"#e9b18b"},{"x":6,"y":6,"z":4,"color":"#e9b18b"},{"x":6,"y":6,"z":5,"color":"#e9b18b"},{"x":6,"y":6,"z":6,"color":"#e9b18b"},{"x":6,"y":6,"z":7,"color":"#e9b18b"},{"x":6,"y":6,"z":8,"color":"#e9b18b"},{"x":6,"y":7,"z":0,"color":"#e9b18b"},{"x":6,"y":7,"z":1,"color":"#e9b18b"},{"x":6,"y":7,"z":2,"color":"#e9b18b"},{"x":6,"y":7,"z":3,"color":"#e9b18b"},{"x":6,"y":7,"z":4,"color":"#e9b18b"},{"x":6,"y":7,"z":5,"color":"#e9b18b"},{"x":6,"y":7,"z":6,"color":"#e9b18b"},{"x":6,"y":7,"z":7,"color":"#e9b18b"},{"x":6,"y":7,"z":8,"color":"#e9b18b"},{"x":7,"y":0,"z":0,"color":"#e9b18b"},{"x":7,"y":0,"z":1,"color":"#e9b18b"},{"x":7,"y":0,"z":2,"color":"#e9b18b"},{"x":7,"y":0,"z":3,"color":"#e9b18b"},{"x":7,"y":0,"z":4,"color":"#e9b18b"},{"x":7,"y":0,"z":5,"color":"#e9b18b"},{"x":7,"y":0,"z":6,"color":"#e9b18b"},{"x":7,"y":0,"z":7,"color":"#e9b18b"},{"x":7,"y":0,"z":8,"color":"#e9b18b"},{"x":7,"y":1,"z":0,"color":"#e9b18b"},{"x":7,"y":1,"z":1,"color":"#e9b18b"},{"x":7,"y":1,"z":2,"color":"#e9b18b"},{"x":7,"y":1,"z":3,"color":"#e9b18b"},{"x":7,"y":1,"z":4,"color":"#e9b18b"},{"x":7,"y":1,"z":5,"color":"#e9b18b"},{"x":7,"y":1,"z":6,"color":"#e9b18b"},{"x":7,"y":1,"z":7,"color":"#e9b18b"},{"x":7,"y":1,"z":8,"color":"#e9b18b"},{"x":7,"y":2,"z":0,"color":"#e9b18b"},{"x":7,"y":2,"z":1,"color":"#e9b18b"},{"x":7,"y":2,"z":2,"color":"#e9b18b"},{"x":7,"y":2,"z":3,"color":"#e9b18b"},{"x":7,"y":2,"z":4,"color":"#e9b18b"},{"x":7,"y":2,"z":5,"color":"#e9b18b"},{"x":7,"y":2,"z":6,"color":"#e9b18b"},{"x":7,"y":2,"z":7,"color":"#e9b18b"},{"x":7,"y":2,"z":8,"color":"#e9b18b"},{"x":7,"y":3,"z":0,"color":"#e9b18b"},{"x":7,"y":3,"z":1,"color":"#e9b18b"},{"x":7,"y":3,"z":2,"color":"#e9b18b"},{"x":7,"y":3,"z":3,"color":"#e9b18b"},{"x":7,"y":3,"z":4,"color":"#e9b18b"},{"x":7,"y":3,"z":5,"color":"#e9b18b"},{"x":7,"y":3,"z":6,"color":"#e9b18b"},{"x":7,"y":3,"z":7,"color":"#e9b18b"},{"x":7,"y":3,"z":8,"color":"#e9b18b"},{"x":7,"y":4,"z":0,"color":"#e9b18b"},{"x":7,"y":4,"z":1,"color":"#e9b18b"},{"x":7,"y":4,"z":2,"color":"#e9b18b"},{"x":7,"y":4,"z":3,"color":"#e9b18b"},{"x":7,"y":4,"z":4,"color":"#e9b18b"},{"x":7,"y":4,"z":5,"color":"#e9b18b"},{"x":7,"y":4,"z":6,"color":"#e9b18b"},{"x":7,"y":4,"z":7,"color":"#e9b18b"},{"x":7,"y":4,"z":8,"color":"#e9b18b"},{"x":7,"y":5,"z":0,"color":"#e9b18b"},{"x":7,"y":5,"z":1,"color":"#e9b18b"},{"x":7,"y":5,"z":2,"color":"#e9b18b"},{"x":7,"y":5,"z":3,"color":"#e9b18b"},{"x":7,"y":5,"z":4,"color":"#e9b18b"},{"x":7,"y":5,"z":5,"color":"#e9b18b"},{"x":7,"y":5,"z":6,"color":"#e9b18b"},{"x":7,"y":5,"z":7,"color":"#e9b18b"},{"x":7,"y":5,"z":8,"color":"#e9b18b"},{"x":7,"y":6,"z":0,"color":"#e9b18b"},{"x":7,"y":6,"z":1,"color":"#e9b18b"},{"x":7,"y":6,"z":2,"color":"#e9b18b"},{"x":7,"y":6,"z":3,"color":"#e9b18b"},{"x":7,"y":6,"z":4,"color":"#e9b18b"},{"x":7,"y":6,"z":5,"color":"#e9b18b"},{"x":7,"y":6,"z":6,"color":"#e9b18b"},{"x":7,"y":6,"z":7,"color":"#e9b18b"},{"x":7,"y":6,"z":8,"color":"#e9b18b"},{"x":7,"y":7,"z":0,"color":"#e9b18b"},{"x":7,"y":7,"z":1,"color":"#e9b18b"},{"x":7,"y":7,"z":2,"color":"#e9b18b"},{"x":7,"y":7,"z":3,"color":"#e9b18b"},{"x":7,"y":7,"z":4,"color":"#e9b18b"},{"x":7,"y":7,"z":5,"color":"#e9b18b"},{"x":7,"y":7,"z":6,"color":"#e9b18b"},{"x":7,"y":7,"z":7,"color":"#e9b18b"},{"x":7,"y":7,"z":8,"color":"#e9b18b"},{"x":8,"y":0,"z":0,"color":"#e9b18b"},{"x":8,"y":0,"z":1,"color":"#e9b18b"},{"x":8,"y":0,"z":2,"color":"#e9b18b"},{"x":8,"y":0,"z":3,"color":"#e9b18b"},{"x":8,"y":0,"z":4,"color":"#e9b18b"},{"x":8,"y":0,"z":5,"color":"#e9b18b"},{"x":8,"y":0,"z":6,"color":"#e9b18b"},{"x":8,"y":0,"z":7,"color":"#e9b18b"},{"x":8,"y":0,"z":8,"color":"#e9b18b"},{"x":8,"y":1,"z":0,"color":"#e9b18b"},{"x":8,"y":1,"z":1,"color":"#e9b18b"},{"x":8,"y":1,"z":2,"color":"#e9b18b"},{"x":8,"y":1,"z":3,"color":"#e9b18b"},{"x":8,"y":1,"z":4,"color":"#e9b18b"},{"x":8,"y":1,"z":5,"color":"#e9b18b"},{"x":8,"y":1,"z":6,"color":"#e9b18b"},{"x":8,"y":1,"z":7,"color":"#e9b18b"},{"x":8,"y":1,"z":8,"color":"#e9b18b"},{"x":8,"y":2,"z":0,"color":"#e9b18b"},{"x":8,"y":2,"z":1,"color":"#e9b18b"},{"x":8,"y":2,"z":2,"color":"#e9b18b"},{"x":8,"y":2,"z":3,"color":"#e9b18b"},{"x":8,"y":2,"z":4,"color":"#e9b18b"},{"x":8,"y":2,"z":5,"color":"#e9b18b"},{"x":8,"y":2,"z":6,"color":"#e9b18b"},{"x":8,"y":2,"z":7,"color":"#e9b18b"},{"x":8,"y":2,"z":8,"color":"#e9b18b"},{"x":8,"y":3,"z":0,"color":"#e9b18b"},{"x":8,"y":3,"z":1,"color":"#e9b18b"},{"x":8,"y":3,"z":2,"color":"#e9b18b"},{"x":8,"y":3,"z":3,"color":"#e9b18b"},{"x":8,"y":3,"z":4,"color":"#e9b18b"},{"x":8,"y":3,"z":5,"color":"#e9b18b"},{"x":8,"y":3,"z":6,"color":"#e9b18b"},{"x":8,"y":3,"z":7,"color":"#e9b18b"},{"x":8,"y":3,"z":8,"color":"#e9b18b"},{"x":8,"y":4,"z":0,"color":"#e9b18b"},{"x":8,"y":4,"z":1,"color":"#e9b18b"},{"x":8,"y":4,"z":2,"color":"#e9b18b"},{"x":8,"y":4,"z":3,"color":"#e9b18b"},{"x":8,"y":4,"z":4,"color":"#e9b18b"},{"x":8,"y":4,"z":5,"color":"#e9b18b"},{"x":8,"y":4,"z":6,"color":"#e9b18b"},{"x":8,"y":4,"z":7,"color":"#e9b18b"},{"x":8,"y":4,"z":8,"color":"#e9b18b"},{"x":8,"y":5,"z":0,"color":"#e9b18b"},{"x":8,"y":5,"z":1,"color":"#e9b18b"},{"x":8,"y":5,"z":2,"color":"#e9b18b"},{"x":8,"y":5,"z":3,"color":"#e9b18b"},{"x":8,"y":5,"z":4,"color":"#e9b18b"},{"x":8,"y":5,"z":5,"color":"#e9b18b"},{"x":8,"y":5,"z":6,"color":"#e9b18b"},{"x":8,"y":5,"z":7,"color":"#e9b18b"},{"x":8,"y":5,"z":8,"color":"#e9b18b"},{"x":8,"y":6,"z":0,"color":"#e9b18b"},{"x":8,"y":6,"z":1,"color":"#e9b18b"},{"x":8,"y":6,"z":2,"color":"#e9b18b"},{"x":8,"y":6,"z":3,"color":"#e9b18b"},{"x":8,"y":6,"z":4,"color":"#e9b18b"},{"x":8,"y":6,"z":5,"color":"#e9b18b"},{"x":8,"y":6,"z":6,"color":"#e9b18b"},{"x":8,"y":6,"z":7,"color":"#e9b18b"},{"x":8,"y":6,"z":8,"color":"#e9b18b"},{"x":8,"y":7,"z":0,"color":"#e9b18b"},{"x":8,"y":7,"z":1,"color":"#e9b18b"},{"x":8,"y":7,"z":2,"color":"#e9b18b"},{"x":8,"y":7,"z":3,"color":"#e9b18b"},{"x":8,"y":7,"z":4,"color":"#e9b18b"},{"x":8,"y":7,"z":5,"color":"#e9b18b"},{"x":8,"y":7,"z":6,"color":"#e9b18b"},{"x":8,"y":7,"z":7,"color":"#e9b18b"},{"x":8,"y":7,"z":8,"color":"#e9b18b"},{"x":9,"y":0,"z":0,"color":"#e9b18b"},{"x":9,"y":0,"z":1,"color":"#e9b18b"},{"x":9,"y":0,"z":2,"color":"#e9b18b"},{"x":9,"y":0,"z":3,"color":"#e9b18b"},{"x":9,"y":0,"z":4,"color":"#e9b18b"},{"x":9,"y":0,"z":5,"color":"#e9b18b"},{"x":9,"y":0,"z":6,"color":"#e9b18b"},{"x":9,"y":0,"z":7,"color":"#e9b18b"},{"x":9,"y":0,"z":8,"color":"#e9b18b"},{"x":9,"y":1,"z":0,"color":"#e9b18b"},{"x":9,"y":1,"z":1,"color":"#e9b18b"},{"x":9,"y":1,"z":2,"color":"#e9b18b"},{"x":9,"y":1,"z":3,"color":"#e9b18b"},{"x":9,"y":1,"z":4,"color":"#e9b18b"},{"x":9,"y":1,"z":5,"color":"#e9b18b"},{"x":9,"y":1,"z":6,"color":"#e9b18b"},{"x":9,"y":1,"z":7,"color":"#e9b18b"},{"x":9,"y":1,"z":8,"color":"#e9b18b"},{"x":9,"y":2,"z":0,"color":"#e9b18b"},{"x":9,"y":2,"z":1,"color":"#e9b18b"},{"x":9,"y":2,"z":2,"color":"#e9b18b"},{"x":9,"y":2,"z":3,"color":"#e9b18b"},{"x":9,"y":2,"z":4,"color":"#e9b18b"},{"x":9,"y":2,"z":5,"color":"#e9b18b"},{"x":9,"y":2,"z":6,"color":"#e9b18b"},{"x":9,"y":2,"z":7,"color":"#e9b18b"},{"x":9,"y":2,"z":8,"color":"#e9b18b"},{"x":9,"y":3,"z":0,"color":"#e9b18b"},{"x":9,"y":3,"z":1,"color":"#e9b18b"},{"x":9,"y":3,"z":2,"color":"#e9b18b"},{"x":9,"y":3,"z":3,"color":"#e9b18b"},{"x":9,"y":3,"z":4,"color":"#e9b18b"},{"x":9,"y":3,"z":5,"color":"#e9b18b"},{"x":9,"y":3,"z":6,"color":"#e9b18b"},{"x":9,"y":3,"z":7,"color":"#e9b18b"},{"x":9,"y":3,"z":8,"color":"#e9b18b"},{"x":9,"y":4,"z":0,"color":"#e9b18b"},{"x":9,"y":4,"z":1,"color":"#e9b18b"},{"x":9,"y":4,"z":2,"color":"#e9b18b"},{"x":9,"y":4,"z":3,"color":"#e9b18b"},{"x":9,"y":4,"z":4,"color":"#e9b18b"},{"x":9,"y":4,"z":5,"color":"#e9b18b"},{"x":9,"y":4,"z":6,"color":"#e9b18b"},{"x":9,"y":4,"z":7,"color":"#e9b18b"},{"x":9,"y":4,"z":8,"color":"#e9b18b"},{"x":9,"y":5,"z":0,"color":"#e9b18b"},{"x":9,"y":5,"z":1,"color":"#e9b18b"},{"x":9,"y":5,"z":2,"color":"#e9b18b"},{"x":9,"y":5,"z":3,"color":"#e9b18b"},{"x":9,"y":5,"z":4,"color":"#e9b18b"},{"x":9,"y":5,"z":5,"color":"#e9b18b"},{"x":9,"y":5,"z":6,"color":"#e9b18b"},{"x":9,"y":5,"z":7,"color":"#e9b18b"},{"x":9,"y":5,"z":8,"color":"#e9b18b"},{"x":9,"y":6,"z":0,"color":"#e9b18b"},{"x":9,"y":6,"z":1,"color":"#e9b18b"},{"x":9,"y":6,"z":2,"color":"#e9b18b"},{"x":9,"y":6,"z":3,"color":"#e9b18b"},{"x":9,"y":6,"z":4,"color":"#e9b18b"},{"x":9,"y":6,"z":5,"color":"#e9b18b"},{"x":9,"y":6,"z":6,"color":"#e9b18b"},{"x":9,"y":6,"z":7,"color":"#e9b18b"},{"x":9,"y":6,"z":8,"color":"#e9b18b"},{"x":9,"y":7,"z":0,"color":"#e9b18b"},{"x":9,"y":7,"z":1,"color":"#e9b18b"},{"x":9,"y":7,"z":2,"color":"#e9b18b"},{"x":9,"y":7,"z":3,"color":"#e9b18b"},{"x":9,"y":7,"z":4,"color":"#e9b18b"},{"x":9,"y":7,"z":5,"color":"#e9b18b"},{"x":9,"y":7,"z":6,"color":"#e9b18b"},{"x":9,"y":7,"z":7,"color":"#e9b18b"},{"x":9,"y":7,"z":8,"color":"#e9b18b"},{"x":10,"y":0,"z":0,"color":"#e9b18b"},{"x":10,"y":0,"z":1,"color":"#e9b18b"},{"x":10,"y":0,"z":2,"color":"#e9b18b"},{"x":10,"y":0,"z":3,"color":"#e9b18b"},{"x":10,"y":0,"z":4,"color":"#e9b18b"},{"x":10,"y":0,"z":5,"color":"#e9b18b"},{"x":10,"y":0,"z":6,"color":"#e9b18b"},{"x":10,"y":0,"z":7,"color":"#e9b18b"},{"x":10,"y":0,"z":8,"color":"#e9b18b"},{"x":10,"y":1,"z":0,"color":"#e9b18b"},{"x":10,"y":1,"z":1,"color":"#e9b18b"},{"x":10,"y":1,"z":2,"color":"#e9b18b"},{"x":10,"y":1,"z":3,"color":"#e9b18b"},{"x":10,"y":1,"z":4,"color":"#e9b18b"},{"x":10,"y":1,"z":5,"color":"#e9b18b"},{"x":10,"y":1,"z":6,"color":"#e9b18b"},{"x":10,"y":1,"z":7,"color":"#e9b18b"},{"x":10,"y":1,"z":8,"color":"#e9b18b"},{"x":10,"y":2,"z":0,"color":"#e9b18b"},{"x":10,"y":2,"z":1,"color":"#e9b18b"},{"x":10,"y":2,"z":2,"color":"#e9b18b"},{"x":10,"y":2,"z":3,"color":"#e9b18b"},{"x":10,"y":2,"z":4,"color":"#e9b18b"},{"x":10,"y":2,"z":5,"color":"#e9b18b"},{"x":10,"y":2,"z":6,"color":"#e9b18b"},{"x":10,"y":2,"z":7,"color":"#e9b18b"},{"x":10,"y":2,"z":8,"color":"#e9b18b"},{"x":10,"y":3,"z":0,"color":"#e9b18b"},{"x":10,"y":3,"z":1,"color":"#e9b18b"},{"x":10,"y":3,"z":2,"color":"#e9b18b"},{"x":10,"y":3,"z":3,"color":"#e9b18b"},{"x":10,"y":3,"z":4,"color":"#e9b18b"},{"x":10,"y":3,"z":5,"color":"#e9b18b"},{"x":10,"y":3,"z":6,"color":"#e9b18b"},{"x":10,"y":3,"z":7,"color":"#e9b18b"},{"x":10,"y":3,"z":8,"color":"#e9b18b"},{"x":10,"y":4,"z":0,"color":"#e9b18b"},{"x":10,"y":4,"z":1,"color":"#e9b18b"},{"x":10,"y":4,"z":2,"color":"#e9b18b"},{"x":10,"y":4,"z":3,"color":"#e9b18b"},{"x":10,"y":4,"z":4,"color":"#e9b18b"},{"x":10,"y":4,"z":5,"color":"#e9b18b"},{"x":10,"y":4,"z":6,"color":"#e9b18b"},{"x":10,"y":4,"z":7,"color":"#e9b18b"},{"x":10,"y":4,"z":8,"color":"#e9b18b"},{"x":10,"y":5,"z":0,"color":"#e9b18b"},{"x":10,"y":5,"z":1,"color":"#e9b18b"},{"x":10,"y":5,"z":2,"color":"#e9b18b"},{"x":10,"y":5,"z":3,"color":"#e9b18b"},{"x":10,"y":5,"z":4,"color":"#e9b18b"},{"x":10,"y":5,"z":5,"color":"#e9b18b"},{"x":10,"y":5,"z":6,"color":"#e9b18b"},{"x":10,"y":5,"z":7,"color":"#e9b18b"},{"x":10,"y":5,"z":8,"color":"#e9b18b"},{"x":10,"y":6,"z":0,"color":"#e9b18b"},{"x":10,"y":6,"z":1,"color":"#e9b18b"},{"x":10,"y":6,"z":2,"color":"#e9b18b"},{"x":10,"y":6,"z":3,"color":"#e9b18b"},{"x":10,"y":6,"z":4,"color":"#e9b18b"},{"x":10,"y":6,"z":5,"color":"#e9b18b"},{"x":10,"y":6,"z":6,"color":"#e9b18b"},{"x":10,"y":6,"z":7,"color":"#e9b18b"},{"x":10,"y":6,"z":8,"color":"#e9b18b"},{"x":10,"y":7,"z":0,"color":"#e9b18b"},{"x":10,"y":7,"z":1,"color":"#e9b18b"},{"x":10,"y":7,"z":2,"color":"#e9b18b"},{"x":10,"y":7,"z":3,"color":"#e9b18b"},{"x":10,"y":7,"z":4,"color":"#e9b18b"},{"x":10,"y":7,"z":5,"color":"#e9b18b"},{"x":10,"y":7,"z":6,"color":"#e9b18b"},{"x":10,"y":7,"z":7,"color":"#e9b18b"},{"x":10,"y":7,"z":8,"color":"#e9b18b"},{"x":0,"y":8,"z":0,"color":"#a84d59"},{"x":0,"y":8,"z":1,"color":"#a84d59"},{"x":0,"y":8,"z":2,"color":"#a84d59"},{"x":0,"y":8,"z":3,"color":"#a84d59"},{"x":0,"y":8,"z":4,"color":"#a84d59"},{"x":0,"y":8,"z":5,"color":"#a84d59"},{"x":0,"y":8,"z":6,"color":"#a84d59"},{"x":0,"y":8,"z":7,"color":"#a84d59"},{"x":0,"y":8,"z":8,"color":"#a84d59"},{"x":0,"y":9,"z":0,"color":"#a84d59"},{"x":0,"y":9,"z":1,"color":"#a84d59"},{"x":0,"y":9,"z":2,"color":"#a84d59"},{"x":0,"y":9,"z":3,"color":"#a84d59"},{"x":0,"y":9,"z":4,"color":"#a84d59"},{"x":0,"y":9,"z":5,"color":"#a84d59"},{"x":0,"y":9,"z":6,"color":"#a84d59"},{"x":0,"y":9,"z":7,"color":"#a84d59"},{"x":0,"y":9,"z":8,"color":"#a84d59"},{"x":1,"y":8,"z":0,"color":"#a84d59"},{"x":1,"y":8,"z":1,"color":"#a84d59"},{"x":1,"y":8,"z":2,"color":"#a84d59"},{"x":1,"y":8,"z":3,"color":"#a84d59"},{"x":1,"y":8,"z":4,"color":"#a84d59"},{"x":1,"y":8,"z":5,"color":"#a84d59"},{"x":1,"y":8,"z":6,"color":"#a84d59"},{"x":1,"y":8,"z":7,"color":"#a84d59"},{"x":1,"y":8,"z":8,"color":"#a84d59"},{"x":1,"y":9,"z":0,"color":"#a84d59"},{"x":1,"y":9,"z":1,"color":"#a84d59"},{"x":1,"y":9,"z":2,"color":"#a84d59"},{"x":1,"y":9,"z":3,"color":"#a84d59"},{"x":1,"y":9,"z":4,"color":"#a84d59"},{"x":1,"y":9,"z":5,"color":"#a84d59"},{"x":1,"y":9,"z":6,"color":"#a84d59"},{"x":1,"y":9,"z":7,"color":"#a84d59"},{"x":1,"y":9,"z":8,"color":"#a84d59"},{"x":2,"y":8,"z":0,"color":"#a84d59"},{"x":2,"y":8,"z":1,"color":"#a84d59"},{"x":2,"y":8,"z":2,"color":"#a84d59"},{"x":2,"y":8,"z":3,"color":"#a84d59"},{"x":2,"y":8,"z":4,"color":"#a84d59"},{"x":2,"y":8,"z":5,"color":"#a84d59"},{"x":2,"y":8,"z":6,"color":"#a84d59"},{"x":2,"y":8,"z":7,"color":"#a84d59"},{"x":2,"y":8,"z":8,"color":"#a84d59"},{"x":2,"y":9,"z":0,"color":"#a84d59"},{"x":2,"y":9,"z":1,"color":"#a84d59"},{"x":2,"y":9,"z":2,"color":"#a84d59"},{"x":2,"y":9,"z":3,"color":"#a84d59"},{"x":2,"y":9,"z":4,"color":"#a84d59"},{"x":2,"y":9,"z":5,"color":"#a84d59"},{"x":2,"y":9,"z":6,"color":"#a84d59"},{"x":2,"y":9,"z":7,"color":"#a84d59"},{"x":2,"y":9,"z":8,"color":"#a84d59"},{"x":3,"y":8,"z":0,"color":"#a84d59"},{"x":3,"y":8,"z":1,"color":"#a84d59"},{"x":3,"y":8,"z":2,"color":"#a84d59"},{"x":3,"y":8,"z":3,"color":"#a84d59"},{"x":3,"y":8,"z":4,"color":"#a84d59"},{"x":3,"y":8,"z":5,"color":"#a84d59"},{"x":3,"y":8,"z":6,"color":"#a84d59"},{"x":3,"y":8,"z":7,"color":"#a84d59"},{"x":3,"y":8,"z":8,"color":"#a84d59"},{"x":3,"y":9,"z":0,"color":"#a84d59"},{"x":3,"y":9,"z":1,"color":"#a84d59"},{"x":3,"y":9,"z":2,"color":"#a84d59"},{"x":3,"y":9,"z":3,"color":"#a84d59"},{"x":3,"y":9,"z":4,"color":"#a84d59"},{"x":3,"y":9,"z":5,"color":"#a84d59"},{"x":3,"y":9,"z":6,"color":"#a84d59"},{"x":3,"y":9,"z":7,"color":"#a84d59"},{"x":3,"y":9,"z":8,"color":"#a84d59"},{"x":4,"y":8,"z":0,"color":"#a84d59"},{"x":4,"y":8,"z":1,"color":"#a84d59"},{"x":4,"y":8,"z":2,"color":"#a84d59"},{"x":4,"y":8,"z":3,"color":"#a84d59"},{"x":4,"y":8,"z":4,"color":"#a84d59"},{"x":4,"y":8,"z":5,"color":"#a84d59"},{"x":4,"y":8,"z":6,"color":"#a84d59"},{"x":4,"y":8,"z":7,"color":"#a84d59"},{"x":4,"y":8,"z":8,"color":"#a84d59"},{"x":4,"y":9,"z":0,"color":"#a84d59"},{"x":4,"y":9,"z":1,"color":"#a84d59"},{"x":4,"y":9,"z":2,"color":"#a84d59"},{"x":4,"y":9,"z":3,"color":"#a84d59"},{"x":4,"y":9,"z":4,"color":"#a84d59"},{"x":4,"y":9,"z":5,"color":"#a84d59"},{"x":4,"y":9,"z":6,"color":"#a84d59"},{"x":4,"y":9,"z":7,"color":"#a84d59"},{"x":4,"y":9,"z":8,"color":"#a84d59"},{"x":5,"y":8,"z":0,"color":"#a84d59"},{"x":5,"y":8,"z":1,"color":"#a84d59"},{"x":5,"y":8,"z":2,"color":"#a84d59"},{"x":5,"y":8,"z":3,"color":"#a84d59"},{"x":5,"y":8,"z":4,"color":"#a84d59"},{"x":5,"y":8,"z":5,"color":"#a84d59"},{"x":5,"y":8,"z":6,"color":"#a84d59"},{"x":5,"y":8,"z":7,"color":"#a84d59"},{"x":5,"y":8,"z":8,"color":"#a84d59"},{"x":5,"y":9,"z":0,"color":"#a84d59"},{"x":5,"y":9,"z":1,"color":"#a84d59"},{"x":5,"y":9,"z":2,"color":"#a84d59"},{"x":5,"y":9,"z":3,"color":"#a84d59"},{"x":5,"y":9,"z":4,"color":"#a84d59"},{"x":5,"y":9,"z":5,"color":"#a84d59"},{"x":5,"y":9,"z":6,"color":"#a84d59"},{"x":5,"y":9,"z":7,"color":"#a84d59"},{"x":5,"y":9,"z":8,"color":"#a84d59"},{"x":6,"y":8,"z":0,"color":"#a84d59"},{"x":6,"y":8,"z":1,"color":"#a84d59"},{"x":6,"y":8,"z":2,"color":"#a84d59"},{"x":6,"y":8,"z":3,"color":"#a84d59"},{"x":6,"y":8,"z":4,"color":"#a84d59"},{"x":6,"y":8,"z":5,"color":"#a84d59"},{"x":6,"y":8,"z":6,"color":"#a84d59"},{"x":6,"y":8,"z":7,"color":"#a84d59"},{"x":6,"y":8,"z":8,"color":"#a84d59"},{"x":6,"y":9,"z":0,"color":"#a84d59"},{"x":6,"y":9,"z":1,"color":"#a84d59"},{"x":6,"y":9,"z":2,"color":"#a84d59"},{"x":6,"y":9,"z":3,"color":"#a84d59"},{"x":6,"y":9,"z":4,"color":"#a84d59"},{"x":6,"y":9,"z":5,"color":"#a84d59"},{"x":6,"y":9,"z":6,"color":"#a84d59"},{"x":6,"y":9,"z":7,"color":"#a84d59"},{"x":6,"y":9,"z":8,"color":"#a84d59"},{"x":7,"y":8,"z":0,"color":"#a84d59"},{"x":7,"y":8,"z":1,"color":"#a84d59"},{"x":7,"y":8,"z":2,"color":"#a84d59"},{"x":7,"y":8,"z":3,"color":"#a84d59"},{"x":7,"y":8,"z":4,"color":"#a84d59"},{"x":7,"y":8,"z":5,"color":"#a84d59"},{"x":7,"y":8,"z":6,"color":"#a84d59"},{"x":7,"y":8,"z":7,"color":"#a84d59"},{"x":7,"y":8,"z":8,"color":"#a84d59"},{"x":7,"y":9,"z":0,"color":"#a84d59"},{"x":7,"y":9,"z":1,"color":"#a84d59"},{"x":7,"y":9,"z":2,"color":"#a84d59"},{"x":7,"y":9,"z":3,"color":"#a84d59"},{"x":7,"y":9,"z":4,"color":"#a84d59"},{"x":7,"y":9,"z":5,"color":"#a84d59"},{"x":7,"y":9,"z":6,"color":"#a84d59"},{"x":7,"y":9,"z":7,"color":"#a84d59"},{"x":7,"y":9,"z":8,"color":"#a84d59"},{"x":8,"y":8,"z":0,"color":"#a84d59"},{"x":8,"y":8,"z":1,"color":"#a84d59"},{"x":8,"y":8,"z":2,"color":"#a84d59"},{"x":8,"y":8,"z":3,"color":"#a84d59"},{"x":8,"y":8,"z":4,"color":"#a84d59"},{"x":8,"y":8,"z":5,"color":"#a84d59"},{"x":8,"y":8,"z":6,"color":"#a84d59"},{"x":8,"y":8,"z":7,"color":"#a84d59"},{"x":8,"y":8,"z":8,"color":"#a84d59"},{"x":8,"y":9,"z":0,"color":"#a84d59"},{"x":8,"y":9,"z":1,"color":"#a84d59"},{"x":8,"y":9,"z":2,"color":"#a84d59"},{"x":8,"y":9,"z":3,"color":"#a84d59"},{"x":8,"y":9,"z":4,"color":"#a84d59"},{"x":8,"y":9,"z":5,"color":"#a84d59"},{"x":8,"y":9,"z":6,"color":"#a84d59"},{"x":8,"y":9,"z":7,"color":"#a84d59"},{"x":8,"y":9,"z":8,"color":"#a84d59"},{"x":9,"y":8,"z":0,"color":"#a84d59"},{"x":9,"y":8,"z":1,"color":"#a84d59"},{"x":9,"y":8,"z":2,"color":"#a84d59"},{"x":9,"y":8,"z":3,"color":"#a84d59"},{"x":9,"y":8,"z":4,"color":"#a84d59"},{"x":9,"y":8,"z":5,"color":"#a84d59"},{"x":9,"y":8,"z":6,"color":"#a84d59"},{"x":9,"y":8,"z":7,"color":"#a84d59"},{"x":9,"y":8,"z":8,"color":"#a84d59"},{"x":9,"y":9,"z":0,"color":"#a84d59"},{"x":9,"y":9,"z":1,"color":"#a84d59"},{"x":9,"y":9,"z":2,"color":"#a84d59"},{"x":9,"y":9,"z":3,"color":"#a84d59"},{"x":9,"y":9,"z":4,"color":"#a84d59"},{"x":9,"y":9,"z":5,"color":"#a84d59"},{"x":9,"y":9,"z":6,"color":"#a84d59"},{"x":9,"y":9,"z":7,"color":"#a84d59"},{"x":9,"y":9,"z":8,"color":"#a84d59"},{"x":10,"y":8,"z":0,"color":"#a84d59"},{"x":10,"y":8,"z":1,"color":"#a84d59"},{"x":10,"y":8,"z":2,"color":"#a84d59"},{"x":10,"y":8,"z":3,"color":"#a84d59"},{"x":10,"y":8,"z":4,"color":"#a84d59"},{"x":10,"y":8,"z":5,"color":"#a84d59"},{"x":10,"y":8,"z":6,"color":"#a84d59"},{"x":10,"y":8,"z":7,"color":"#a84d59"},{"x":10,"y":8,"z":8,"color":"#a84d59"},{"x":10,"y":9,"z":0,"color":"#a84d59"},{"x":10,"y":9,"z":1,"color":"#a84d59"},{"x":10,"y":9,"z":2,"color":"#a84d59"},{"x":10,"y":9,"z":3,"color":"#a84d59"},{"x":10,"y":9,"z":4,"color":"#a84d59"},{"x":10,"y":9,"z":5,"color":"#a84d59"},{"x":10,"y":9,"z":6,"color":"#a84d59"},{"x":10,"y":9,"z":7,"color":"#a84d59"},{"x":10,"y":9,"z":8,"color":"#a84d59"},{"x":1,"y":10,"z":1,"color":"#8d3f4e"},{"x":1,"y":10,"z":2,"color":"#8d3f4e"},{"x":1,"y":10,"z":3,"color":"#8d3f4e"},{"x":1,"y":10,"z":4,"color":"#8d3f4e"},{"x":1,"y":10,"z":5,"color":"#8d3f4e"},{"x":1,"y":10,"z":6,"color":"#8d3f4e"},{"x":1,"y":10,"z":7,"color":"#8d3f4e"},{"x":2,"y":10,"z":1,"color":"#8d3f4e"},{"x":2,"y":10,"z":2,"color":"#8d3f4e"},{"x":2,"y":10,"z":3,"color":"#8d3f4e"},{"x":2,"y":10,"z":4,"color":"#8d3f4e"},{"x":2,"y":10,"z":5,"color":"#8d3f4e"},{"x":2,"y":10,"z":6,"color":"#8d3f4e"},{"x":2,"y":10,"z":7,"color":"#8d3f4e"},{"x":3,"y":10,"z":1,"color":"#8d3f4e"},{"x":3,"y":10,"z":2,"color":"#8d3f4e"},{"x":3,"y":10,"z":3,"color":"#8d3f4e"},{"x":3,"y":10,"z":4,"color":"#8d3f4e"},{"x":3,"y":10,"z":5,"color":"#8d3f4e"},{"x":3,"y":10,"z":6,"color":"#8d3f4e"},{"x":3,"y":10,"z":7,"color":"#8d3f4e"},{"x":4,"y":10,"z":1,"color":"#8d3f4e"},{"x":4,"y":10,"z":2,"color":"#8d3f4e"},{"x":4,"y":10,"z":3,"color":"#8d3f4e"},{"x":4,"y":10,"z":4,"color":"#8d3f4e"},{"x":4,"y":10,"z":5,"color":"#8d3f4e"},{"x":4,"y":10,"z":6,"color":"#8d3f4e"},{"x":4,"y":10,"z":7,"color":"#8d3f4e"},{"x":5,"y":10,"z":1,"color":"#8d3f4e"},{"x":5,"y":10,"z":2,"color":"#8d3f4e"},{"x":5,"y":10,"z":3,"color":"#8d3f4e"},{"x":5,"y":10,"z":4,"color":"#8d3f4e"},{"x":5,"y":10,"z":5,"color":"#8d3f4e"},{"x":5,"y":10,"z":6,"color":"#8d3f4e"},{"x":5,"y":10,"z":7,"color":"#8d3f4e"},{"x":6,"y":10,"z":1,"color":"#8d3f4e"},{"x":6,"y":10,"z":2,"color":"#8d3f4e"},{"x":6,"y":10,"z":3,"color":"#8d3f4e"},{"x":6,"y":10,"z":4,"color":"#8d3f4e"},{"x":6,"y":10,"z":5,"color":"#8d3f4e"},{"x":6,"y":10,"z":6,"color":"#8d3f4e"},{"x":6,"y":10,"z":7,"color":"#8d3f4e"},{"x":7,"y":10,"z":1,"color":"#8d3f4e"},{"x":7,"y":10,"z":2,"color":"#8d3f4e"},{"x":7,"y":10,"z":3,"color":"#8d3f4e"},{"x":7,"y":10,"z":4,"color":"#8d3f4e"},{"x":7,"y":10,"z":5,"color":"#8d3f4e"},{"x":7,"y":10,"z":6,"color":"#8d3f4e"},{"x":7,"y":10,"z":7,"color":"#8d3f4e"},{"x":8,"y":10,"z":1,"color":"#8d3f4e"},{"x":8,"y":10,"z":2,"color":"#8d3f4e"},{"x":8,"y":10,"z":3,"color":"#8d3f4e"},{"x":8,"y":10,"z":4,"color":"#8d3f4e"},{"x":8,"y":10,"z":5,"color":"#8d3f4e"},{"x":8,"y":10,"z":6,"color":"#8d3f4e"},{"x":8,"y":10,"z":7,"color":"#8d3f4e"},{"x":9,"y":10,"z":1,"color":"#8d3f4e"},{"x":9,"y":10,"z":2,"color":"#8d3f4e"},{"x":9,"y":10,"z":3,"color":"#8d3f4e"},{"x":9,"y":10,"z":4,"color":"#8d3f4e"},{"x":9,"y":10,"z":5,"color":"#8d3f4e"},{"x":9,"y":10,"z":6,"color":"#8d3f4e"},{"x":9,"y":10,"z":7,"color":"#8d3f4e"}],"poses":[]},{"id":"hills","name":"Hills","width":16,"height":16,"depth":16,"cubes":[{"x":0,"y":0,"z":0,"color":"#8eaf88"},{"x":0,"y":0,"z":1,"color":"#8eaf88"},{"x":0,"y":0,"z":2,"color":"#8eaf88"},{"x":0,"y":0,"z":3,"color":"#8eaf88"},{"x":0,"y":1,"z":0,"color":"#8eaf88"},{"x":0,"y":1,"z":1,"color":"#8eaf88"},{"x":0,"y":1,"z":2,"color":"#8eaf88"},{"x":0,"y":1,"z":3,"color":"#8eaf88"},{"x":0,"y":2,"z":0,"color":"#8eaf88"},{"x":0,"y":2,"z":1,"color":"#8eaf88"},{"x":0,"y":2,"z":2,"color":"#8eaf88"},{"x":0,"y":2,"z":3,"color":"#8eaf88"},{"x":1,"y":0,"z":0,"color":"#8eaf88"},{"x":1,"y":0,"z":1,"color":"#8eaf88"},{"x":1,"y":0,"z":2,"color":"#8eaf88"},{"x":1,"y":0,"z":3,"color":"#8eaf88"},{"x":1,"y":1,"z":0,"color":"#8eaf88"},{"x":1,"y":1,"z":1,"color":"#8eaf88"},{"x":1,"y":1,"z":2,"color":"#8eaf88"},{"x":1,"y":1,"z":3,"color":"#8eaf88"},{"x":1,"y":2,"z":0,"color":"#8eaf88"},{"x":1,"y":2,"z":1,"color":"#8eaf88"},{"x":1,"y":2,"z":2,"color":"#8eaf88"},{"x":1,"y":2,"z":3,"color":"#8eaf88"},{"x":2,"y":0,"z":0,"color":"#8eaf88"},{"x":2,"y":0,"z":1,"color":"#8eaf88"},{"x":2,"y":0,"z":2,"color":"#8eaf88"},{"x":2,"y":0,"z":3,"color":"#8eaf88"},{"x":2,"y":1,"z":0,"color":"#8eaf88"},{"x":2,"y":1,"z":1,"color":"#8eaf88"},{"x":2,"y":1,"z":2,"color":"#8eaf88"},{"x":2,"y":1,"z":3,"color":"#8eaf88"},{"x":2,"y":2,"z":0,"color":"#8eaf88"},{"x":2,"y":2,"z":1,"color":"#8eaf88"},{"x":2,"y":2,"z":2,"color":"#8eaf88"},{"x":2,"y":2,"z":3,"color":"#8eaf88"},{"x":3,"y":0,"z":0,"color":"#8eaf88"},{"x":3,"y":0,"z":1,"color":"#8eaf88"},{"x":3,"y":0,"z":2,"color":"#8eaf88"},{"x":3,"y":0,"z":3,"color":"#8eaf88"},{"x":3,"y":1,"z":0,"color":"#8eaf88"},{"x":3,"y":1,"z":1,"color":"#8eaf88"},{"x":3,"y":1,"z":2,"color":"#8eaf88"},{"x":3,"y":1,"z":3,"color":"#8eaf88"},{"x":3,"y":2,"z":0,"color":"#8eaf88"},{"x":3,"y":2,"z":1,"color":"#8eaf88"},{"x":3,"y":2,"z":2,"color":"#8eaf88"},{"x":3,"y":2,"z":3,"color":"#8eaf88"},{"x":4,"y":0,"z":0,"color":"#8eaf88"},{"x":4,"y":0,"z":1,"color":"#8eaf88"},{"x":4,"y":0,"z":2,"color":"#8eaf88"},{"x":4,"y":0,"z":3,"color":"#8eaf88"},{"x":4,"y":1,"z":0,"color":"#8eaf88"},{"x":4,"y":1,"z":1,"color":"#8eaf88"},{"x":4,"y":1,"z":2,"color":"#8eaf88"},{"x":4,"y":1,"z":3,"color":"#8eaf88"},{"x":4,"y":2,"z":0,"color":"#8eaf88"},{"x":4,"y":2,"z":1,"color":"#8eaf88"},{"x":4,"y":2,"z":2,"color":"#8eaf88"},{"x":4,"y":2,"z":3,"color":"#8eaf88"},{"x":5,"y":0,"z":0,"color":"#8eaf88"},{"x":5,"y":0,"z":1,"color":"#8eaf88"},{"x":5,"y":0,"z":2,"color":"#8eaf88"},{"x":5,"y":0,"z":3,"color":"#8eaf88"},{"x":5,"y":1,"z":0,"color":"#8eaf88"},{"x":5,"y":1,"z":1,"color":"#8eaf88"},{"x":5,"y":1,"z":2,"color":"#8eaf88"},{"x":5,"y":1,"z":3,"color":"#8eaf88"},{"x":5,"y":2,"z":0,"color":"#8eaf88"},{"x":5,"y":2,"z":1,"color":"#8eaf88"},{"x":5,"y":2,"z":2,"color":"#8eaf88"},{"x":5,"y":2,"z":3,"color":"#8eaf88"},{"x":6,"y":0,"z":0,"color":"#8eaf88"},{"x":6,"y":0,"z":1,"color":"#8eaf88"},{"x":6,"y":0,"z":2,"color":"#8eaf88"},{"x":6,"y":0,"z":3,"color":"#8eaf88"},{"x":6,"y":1,"z":0,"color":"#8eaf88"},{"x":6,"y":1,"z":1,"color":"#8eaf88"},{"x":6,"y":1,"z":2,"color":"#8eaf88"},{"x":6,"y":1,"z":3,"color":"#8eaf88"},{"x":6,"y":2,"z":0,"color":"#8eaf88"},{"x":6,"y":2,"z":1,"color":"#8eaf88"},{"x":6,"y":2,"z":2,"color":"#8eaf88"},{"x":6,"y":2,"z":3,"color":"#8eaf88"},{"x":7,"y":0,"z":0,"color":"#8eaf88"},{"x":7,"y":0,"z":1,"color":"#8eaf88"},{"x":7,"y":0,"z":2,"color":"#8eaf88"},{"x":7,"y":0,"z":3,"color":"#8eaf88"},{"x":7,"y":1,"z":0,"color":"#8eaf88"},{"x":7,"y":1,"z":1,"color":"#8eaf88"},{"x":7,"y":1,"z":2,"color":"#8eaf88"},{"x":7,"y":1,"z":3,"color":"#8eaf88"},{"x":7,"y":2,"z":0,"color":"#8eaf88"},{"x":7,"y":2,"z":1,"color":"#8eaf88"},{"x":7,"y":2,"z":2,"color":"#8eaf88"},{"x":7,"y":2,"z":3,"color":"#8eaf88"},{"x":8,"y":0,"z":0,"color":"#8eaf88"},{"x":8,"y":0,"z":1,"color":"#8eaf88"},{"x":8,"y":0,"z":2,"color":"#8eaf88"},{"x":8,"y":0,"z":3,"color":"#8eaf88"},{"x":8,"y":1,"z":0,"color":"#8eaf88"},{"x":8,"y":1,"z":1,"color":"#8eaf88"},{"x":8,"y":1,"z":2,"color":"#8eaf88"},{"x":8,"y":1,"z":3,"color":"#8eaf88"},{"x":8,"y":2,"z":0,"color":"#8eaf88"},{"x":8,"y":2,"z":1,"color":"#8eaf88"},{"x":8,"y":2,"z":2,"color":"#8eaf88"},{"x":8,"y":2,"z":3,"color":"#8eaf88"},{"x":9,"y":0,"z":0,"color":"#8eaf88"},{"x":9,"y":0,"z":1,"color":"#8eaf88"},{"x":9,"y":0,"z":2,"color":"#8eaf88"},{"x":9,"y":0,"z":3,"color":"#8eaf88"},{"x":9,"y":1,"z":0,"color":"#8eaf88"},{"x":9,"y":1,"z":1,"color":"#8eaf88"},{"x":9,"y":1,"z":2,"color":"#8eaf88"},{"x":9,"y":1,"z":3,"color":"#8eaf88"},{"x":9,"y":2,"z":0,"color":"#8eaf88"},{"x":9,"y":2,"z":1,"color":"#8eaf88"},{"x":9,"y":2,"z":2,"color":"#8eaf88"},{"x":9,"y":2,"z":3,"color":"#8eaf88"},{"x":10,"y":0,"z":0,"color":"#8eaf88"},{"x":10,"y":0,"z":1,"color":"#8eaf88"},{"x":10,"y":0,"z":2,"color":"#8eaf88"},{"x":10,"y":0,"z":3,"color":"#8eaf88"},{"x":10,"y":1,"z":0,"color":"#8eaf88"},{"x":10,"y":1,"z":1,"color":"#8eaf88"},{"x":10,"y":1,"z":2,"color":"#8eaf88"},{"x":10,"y":1,"z":3,"color":"#8eaf88"},{"x":10,"y":2,"z":0,"color":"#8eaf88"},{"x":10,"y":2,"z":1,"color":"#8eaf88"},{"x":10,"y":2,"z":2,"color":"#8eaf88"},{"x":10,"y":2,"z":3,"color":"#8eaf88"},{"x":11,"y":0,"z":0,"color":"#8eaf88"},{"x":11,"y":0,"z":1,"color":"#8eaf88"},{"x":11,"y":0,"z":2,"color":"#8eaf88"},{"x":11,"y":0,"z":3,"color":"#8eaf88"},{"x":11,"y":1,"z":0,"color":"#8eaf88"},{"x":11,"y":1,"z":1,"color":"#8eaf88"},{"x":11,"y":1,"z":2,"color":"#8eaf88"},{"x":11,"y":1,"z":3,"color":"#8eaf88"},{"x":11,"y":2,"z":0,"color":"#8eaf88"},{"x":11,"y":2,"z":1,"color":"#8eaf88"},{"x":11,"y":2,"z":2,"color":"#8eaf88"},{"x":11,"y":2,"z":3,"color":"#8eaf88"},{"x":12,"y":0,"z":0,"color":"#8eaf88"},{"x":12,"y":0,"z":1,"color":"#8eaf88"},{"x":12,"y":0,"z":2,"color":"#8eaf88"},{"x":12,"y":0,"z":3,"color":"#8eaf88"},{"x":12,"y":1,"z":0,"color":"#8eaf88"},{"x":12,"y":1,"z":1,"color":"#8eaf88"},{"x":12,"y":1,"z":2,"color":"#8eaf88"},{"x":12,"y":1,"z":3,"color":"#8eaf88"},{"x":12,"y":2,"z":0,"color":"#8eaf88"},{"x":12,"y":2,"z":1,"color":"#8eaf88"},{"x":12,"y":2,"z":2,"color":"#8eaf88"},{"x":12,"y":2,"z":3,"color":"#8eaf88"},{"x":13,"y":0,"z":0,"color":"#8eaf88"},{"x":13,"y":0,"z":1,"color":"#8eaf88"},{"x":13,"y":0,"z":2,"color":"#8eaf88"},{"x":13,"y":0,"z":3,"color":"#8eaf88"},{"x":13,"y":1,"z":0,"color":"#8eaf88"},{"x":13,"y":1,"z":1,"color":"#8eaf88"},{"x":13,"y":1,"z":2,"color":"#8eaf88"},{"x":13,"y":1,"z":3,"color":"#8eaf88"},{"x":13,"y":2,"z":0,"color":"#8eaf88"},{"x":13,"y":2,"z":1,"color":"#8eaf88"},{"x":13,"y":2,"z":2,"color":"#8eaf88"},{"x":13,"y":2,"z":3,"color":"#8eaf88"},{"x":14,"y":0,"z":0,"color":"#8eaf88"},{"x":14,"y":0,"z":1,"color":"#8eaf88"},{"x":14,"y":0,"z":2,"color":"#8eaf88"},{"x":14,"y":0,"z":3,"color":"#8eaf88"},{"x":14,"y":1,"z":0,"color":"#8eaf88"},{"x":14,"y":1,"z":1,"color":"#8eaf88"},{"x":14,"y":1,"z":2,"color":"#8eaf88"},{"x":14,"y":1,"z":3,"color":"#8eaf88"},{"x":14,"y":2,"z":0,"color":"#8eaf88"},{"x":14,"y":2,"z":1,"color":"#8eaf88"},{"x":14,"y":2,"z":2,"color":"#8eaf88"},{"x":14,"y":2,"z":3,"color":"#8eaf88"},{"x":15,"y":0,"z":0,"color":"#8eaf88"},{"x":15,"y":0,"z":1,"color":"#8eaf88"},{"x":15,"y":0,"z":2,"color":"#8eaf88"},{"x":15,"y":0,"z":3,"color":"#8eaf88"},{"x":15,"y":1,"z":0,"color":"#8eaf88"},{"x":15,"y":1,"z":1,"color":"#8eaf88"},{"x":15,"y":1,"z":2,"color":"#8eaf88"},{"x":15,"y":1,"z":3,"color":"#8eaf88"},{"x":15,"y":2,"z":0,"color":"#8eaf88"},{"x":15,"y":2,"z":1,"color":"#8eaf88"},{"x":15,"y":2,"z":2,"color":"#8eaf88"},{"x":15,"y":2,"z":3,"color":"#8eaf88"},{"x":2,"y":3,"z":0,"color":"#85a49b"},{"x":2,"y":3,"z":1,"color":"#85a49b"},{"x":2,"y":3,"z":2,"color":"#85a49b"},{"x":2,"y":4,"z":0,"color":"#85a49b"},{"x":2,"y":4,"z":1,"color":"#85a49b"},{"x":2,"y":4,"z":2,"color":"#85a49b"},{"x":2,"y":5,"z":0,"color":"#85a49b"},{"x":2,"y":5,"z":1,"color":"#85a49b"},{"x":2,"y":5,"z":2,"color":"#85a49b"},{"x":3,"y":3,"z":0,"color":"#85a49b"},{"x":3,"y":3,"z":1,"color":"#85a49b"},{"x":3,"y":3,"z":2,"color":"#85a49b"},{"x":3,"y":4,"z":0,"color":"#85a49b"},{"x":3,"y":4,"z":1,"color":"#85a49b"},{"x":3,"y":4,"z":2,"color":"#85a49b"},{"x":3,"y":5,"z":0,"color":"#85a49b"},{"x":3,"y":5,"z":1,"color":"#85a49b"},{"x":3,"y":5,"z":2,"color":"#85a49b"},{"x":4,"y":3,"z":0,"color":"#85a49b"},{"x":4,"y":3,"z":1,"color":"#85a49b"},{"x":4,"y":3,"z":2,"color":"#85a49b"},{"x":4,"y":4,"z":0,"color":"#85a49b"},{"x":4,"y":4,"z":1,"color":"#85a49b"},{"x":4,"y":4,"z":2,"color":"#85a49b"},{"x":4,"y":5,"z":0,"color":"#85a49b"},{"x":4,"y":5,"z":1,"color":"#85a49b"},{"x":4,"y":5,"z":2,"color":"#85a49b"},{"x":5,"y":3,"z":0,"color":"#85a49b"},{"x":5,"y":3,"z":1,"color":"#85a49b"},{"x":5,"y":3,"z":2,"color":"#85a49b"},{"x":5,"y":4,"z":0,"color":"#85a49b"},{"x":5,"y":4,"z":1,"color":"#85a49b"},{"x":5,"y":4,"z":2,"color":"#85a49b"},{"x":5,"y":5,"z":0,"color":"#85a49b"},{"x":5,"y":5,"z":1,"color":"#85a49b"},{"x":5,"y":5,"z":2,"color":"#85a49b"},{"x":6,"y":3,"z":0,"color":"#85a49b"},{"x":6,"y":3,"z":1,"color":"#85a49b"},{"x":6,"y":3,"z":2,"color":"#85a49b"},{"x":6,"y":4,"z":0,"color":"#85a49b"},{"x":6,"y":4,"z":1,"color":"#85a49b"},{"x":6,"y":4,"z":2,"color":"#85a49b"},{"x":6,"y":5,"z":0,"color":"#85a49b"},{"x":6,"y":5,"z":1,"color":"#85a49b"},{"x":6,"y":5,"z":2,"color":"#85a49b"},{"x":7,"y":3,"z":0,"color":"#85a49b"},{"x":7,"y":3,"z":1,"color":"#85a49b"},{"x":7,"y":3,"z":2,"color":"#85a49b"},{"x":7,"y":4,"z":0,"color":"#85a49b"},{"x":7,"y":4,"z":1,"color":"#85a49b"},{"x":7,"y":4,"z":2,"color":"#85a49b"},{"x":7,"y":5,"z":0,"color":"#85a49b"},{"x":7,"y":5,"z":1,"color":"#85a49b"},{"x":7,"y":5,"z":2,"color":"#85a49b"},{"x":8,"y":3,"z":0,"color":"#85a49b"},{"x":8,"y":3,"z":1,"color":"#85a49b"},{"x":8,"y":3,"z":2,"color":"#85a49b"},{"x":8,"y":4,"z":0,"color":"#85a49b"},{"x":8,"y":4,"z":1,"color":"#85a49b"},{"x":8,"y":4,"z":2,"color":"#85a49b"},{"x":8,"y":5,"z":0,"color":"#85a49b"},{"x":8,"y":5,"z":1,"color":"#85a49b"},{"x":8,"y":5,"z":2,"color":"#85a49b"},{"x":9,"y":3,"z":0,"color":"#85a49b"},{"x":9,"y":3,"z":1,"color":"#85a49b"},{"x":9,"y":3,"z":2,"color":"#85a49b"},{"x":9,"y":4,"z":0,"color":"#85a49b"},{"x":9,"y":4,"z":1,"color":"#85a49b"},{"x":9,"y":4,"z":2,"color":"#85a49b"},{"x":9,"y":5,"z":0,"color":"#85a49b"},{"x":9,"y":5,"z":1,"color":"#85a49b"},{"x":9,"y":5,"z":2,"color":"#85a49b"},{"x":10,"y":3,"z":0,"color":"#85a49b"},{"x":10,"y":3,"z":1,"color":"#85a49b"},{"x":10,"y":3,"z":2,"color":"#85a49b"},{"x":10,"y":4,"z":0,"color":"#85a49b"},{"x":10,"y":4,"z":1,"color":"#85a49b"},{"x":10,"y":4,"z":2,"color":"#85a49b"},{"x":10,"y":5,"z":0,"color":"#85a49b"},{"x":10,"y":5,"z":1,"color":"#85a49b"},{"x":10,"y":5,"z":2,"color":"#85a49b"},{"x":4,"y":6,"z":0,"color":"#a1b9af"},{"x":4,"y":6,"z":1,"color":"#a1b9af"},{"x":4,"y":6,"z":2,"color":"#a1b9af"},{"x":4,"y":7,"z":0,"color":"#a1b9af"},{"x":4,"y":7,"z":1,"color":"#a1b9af"},{"x":4,"y":7,"z":2,"color":"#a1b9af"},{"x":5,"y":6,"z":0,"color":"#a1b9af"},{"x":5,"y":6,"z":1,"color":"#a1b9af"},{"x":5,"y":6,"z":2,"color":"#a1b9af"},{"x":5,"y":7,"z":0,"color":"#a1b9af"},{"x":5,"y":7,"z":1,"color":"#a1b9af"},{"x":5,"y":7,"z":2,"color":"#a1b9af"},{"x":6,"y":6,"z":0,"color":"#a1b9af"},{"x":6,"y":6,"z":1,"color":"#a1b9af"},{"x":6,"y":6,"z":2,"color":"#a1b9af"},{"x":6,"y":7,"z":0,"color":"#a1b9af"},{"x":6,"y":7,"z":1,"color":"#a1b9af"},{"x":6,"y":7,"z":2,"color":"#a1b9af"},{"x":7,"y":6,"z":0,"color":"#a1b9af"},{"x":7,"y":6,"z":1,"color":"#a1b9af"},{"x":7,"y":6,"z":2,"color":"#a1b9af"},{"x":7,"y":7,"z":0,"color":"#a1b9af"},{"x":7,"y":7,"z":1,"color":"#a1b9af"},{"x":7,"y":7,"z":2,"color":"#a1b9af"},{"x":8,"y":6,"z":0,"color":"#a1b9af"},{"x":8,"y":6,"z":1,"color":"#a1b9af"},{"x":8,"y":6,"z":2,"color":"#a1b9af"},{"x":8,"y":7,"z":0,"color":"#a1b9af"},{"x":8,"y":7,"z":1,"color":"#a1b9af"},{"x":8,"y":7,"z":2,"color":"#a1b9af"},{"x":11,"y":3,"z":0,"color":"#749ea7"},{"x":11,"y":3,"z":1,"color":"#749ea7"},{"x":11,"y":3,"z":2,"color":"#749ea7"},{"x":11,"y":4,"z":0,"color":"#749ea7"},{"x":11,"y":4,"z":1,"color":"#749ea7"},{"x":11,"y":4,"z":2,"color":"#749ea7"},{"x":12,"y":3,"z":0,"color":"#749ea7"},{"x":12,"y":3,"z":1,"color":"#749ea7"},{"x":12,"y":3,"z":2,"color":"#749ea7"},{"x":12,"y":4,"z":0,"color":"#749ea7"},{"x":12,"y":4,"z":1,"color":"#749ea7"},{"x":12,"y":4,"z":2,"color":"#749ea7"},{"x":13,"y":3,"z":0,"color":"#749ea7"},{"x":13,"y":3,"z":1,"color":"#749ea7"},{"x":13,"y":3,"z":2,"color":"#749ea7"},{"x":13,"y":4,"z":0,"color":"#749ea7"},{"x":13,"y":4,"z":1,"color":"#749ea7"},{"x":13,"y":4,"z":2,"color":"#749ea7"},{"x":14,"y":3,"z":0,"color":"#749ea7"},{"x":14,"y":3,"z":1,"color":"#749ea7"},{"x":14,"y":3,"z":2,"color":"#749ea7"},{"x":14,"y":4,"z":0,"color":"#749ea7"},{"x":14,"y":4,"z":1,"color":"#749ea7"},{"x":14,"y":4,"z":2,"color":"#749ea7"},{"x":15,"y":3,"z":0,"color":"#749ea7"},{"x":15,"y":3,"z":1,"color":"#749ea7"},{"x":15,"y":3,"z":2,"color":"#749ea7"},{"x":15,"y":4,"z":0,"color":"#749ea7"},{"x":15,"y":4,"z":1,"color":"#749ea7"},{"x":15,"y":4,"z":2,"color":"#749ea7"}],"poses":[]}],"props":[{"frame":0,"x":180,"y":220,"scale":3,"solid":false,"voxelAssetId":"tree","voxelYaw":0,"voxelInFront":true,"nodeTriggerId":"tree-a"},{"frame":0,"x":380,"y":198,"scale":3,"solid":false,"voxelAssetId":"house","voxelYaw":1,"nodeTriggerId":"house"},{"frame":0,"x":740,"y":214,"scale":3,"solid":false,"voxelAssetId":"tree","voxelYaw":2,"nodeTriggerId":"tree-b"},{"frame":0,"x":900,"y":220,"scale":3,"solid":false,"voxelAssetId":"tree","voxelYaw":0,"nodeTriggerId":"tree-c"}],"frames":{},"idleFrame":0,"walkFrame":0,"jumpFrame":0,"activeSceneId":"forest","scenes":[{"id":"forest","name":"Forest","sceneWidth":640,"sceneHeight":360,"worldWidth":1600,"groundY":308,"backgroundFrame":-1,"backgroundScale":"tile","voxelBackgroundAssetId":"hills","voxelBackgroundYaw":1,"props":[{"frame":0,"x":180,"y":220,"scale":3,"solid":false,"voxelAssetId":"tree","voxelYaw":0,"voxelInFront":true,"nodeTriggerId":"tree-a"},{"frame":0,"x":380,"y":198,"scale":3,"solid":false,"voxelAssetId":"house","voxelYaw":1,"nodeTriggerId":"house"},{"frame":0,"x":740,"y":214,"scale":3,"solid":false,"voxelAssetId":"tree","voxelYaw":2,"nodeTriggerId":"tree-b"},{"frame":0,"x":900,"y":220,"scale":3,"solid":false,"voxelAssetId":"tree","voxelYaw":0,"nodeTriggerId":"tree-c"}],"visualLayers":[],"dialogue":{"characters":[],"lines":[]}}],"nodeEditor":{"nodes":[{"id":"start","type":"eventStart","name":"Begin","next":"message","data":{"sceneId":"forest"}},{"id":"message","type":"actionMessage","next":"","data":{"message":"Voxel trees, cottage, and a 2D visitor!"}}]}}};
+const canvas = document.getElementById("game");
+const gameStatus = document.getElementById("game-status");
+const ctx = canvas.getContext("2d", { alpha:false });
+const rootPlayMode = GAME.playMode || {};
+const runtimeScenes = Array.isArray(rootPlayMode.scenes) ? rootPlayMode.scenes : [];
+let currentSceneId = rootPlayMode.activeSceneId || runtimeScenes[0]?.id || "scene-main";
+const initialScene = runtimeScenes.find(scene => scene.id === currentSceneId) || null;
+let pm = Object.assign({}, rootPlayMode, initialScene || {});
+let ui = Object.assign({ dialogueBoxColor:"rgba(15,15,15,0.94)", dialogueInkColor:"#f7f0da", dialogueBorderColor:"#f7f0da", dialogueBorderWidth:4, dialogueFont:"system-ui, sans-serif", dialogueNameSize:16, dialogueTextSize:15, dialogueMargin:0.035, dialogueBoxHeight:0.28, dialoguePortrait:true, dialogueCounter:true }, GAME.playUi || pm.ui || {});
+let props = Array.isArray(pm.props) ? pm.props : [];
+let visualLayers = Array.isArray(pm.visualLayers) ? pm.visualLayers : [];
+let sceneLayers = visualLayers.filter(layer => layer && ["background", "foreground", "overlay"].includes(layer.role));
+const artW = Math.max(1, GAME.artWidth || 32);
+const artH = Math.max(1, GAME.artHeight || 32);
+const images = {};
+const spriteImages = { actor:{}, object:{} };
+const spriteFrames = GAME.spriteFrames || { actor:{}, object:{} };
+const keys = {};
+const actor = { x:24, y:96, vx:0, vy:0, grounded:false, facing:1 };
+let cameraX = 0;
+let tick = 0;
+let dialogueActive = false;
+let dialogueContinuation = null;
+let dialogueLine = 0;
+let revealStart = 0;
+let revealChars = 0;
+let activeCharacterId = "";
+let nodeMessageText = "";
+let nodeMessageUntil = 0;
+let nodeCheckpoint = rootPlayMode.checkpoint || null;
+let sceneAudio = null;
+let sceneAudioPending = false;
+let sceneAudioGeneration = 0;
+let runtimeAudioUnlocked = false;
+let pendingEffectAudio = [];
+let sceneRuleTransitionTimes = [];
+const effectAudios = new Set();
+const runtimeAudioAssets = Array.isArray(rootPlayMode.audioLibrary) ? rootPlayMode.audioLibrary : [];
+const runtimeAudioMixer = Object.assign({ master:1, music:.85, sfx:1, muteMusic:false, muteSfx:false }, rootPlayMode.audioMixer || {});
+let transitionCooldownUntil = 0;
+let lastFrameTime = 0;
+let gamepadInteractPressed = false;
+let gameFinished = false;
+let nodeEntered = new Set();
+const nodeGraph = rootPlayMode.nodeEditor && Array.isArray(rootPlayMode.nodeEditor.nodes) ? rootPlayMode.nodeEditor : { nodes: [] };
+let nodeVariables = { ...(rootPlayMode.variables || {}) };
+let nodeInventory = [...new Set((rootPlayMode.inventory || []).map(item => String(item || "").trim()).filter(Boolean))].slice(0, 64);
+function propOpen(prop) {
+  const variable = String(prop && prop.openVariable || "");
+  if (!variable) return false;
+  const value = String(nodeVariables[variable] == null ? "" : nodeVariables[variable]).toLowerCase();
+  return ["yes", "true", "open", "1"].includes(value);
+}
+function solidRuntimeProps() { return props.filter(prop => prop && prop.solid !== false && !prop.targetSceneId && !propOpen(prop)); }
+canvas.width = Math.max(160, Math.min(GAME.exportWidth || pm.sceneWidth || 640, 4096));
+canvas.height = Math.max(120, Math.min(GAME.exportHeight || pm.sceneHeight || 360, 2160));
+function syncStageSize() {
+  const stage = canvas.parentElement;
+  const pixelWidth = Math.max(160, canvas.width || 640);
+  const pixelHeight = Math.max(120, canvas.height || 360);
+  stage.style.width = "min(100%, " + pixelWidth + "px)";
+  stage.style.height = "auto";
+  stage.style.aspectRatio = pixelWidth + " / " + pixelHeight;
+  canvas.style.width = "100%";
+  canvas.style.height = "100%";
+}
+syncStageSize();
+ctx.imageSmoothingEnabled = false;
+function runtimeAudioAsset(id) { return runtimeAudioAssets.find(asset => String(asset && asset.id) === String(id || "")) || null; }
+function runtimeAudioGain(value, fallback = 1) {
+  const number = Number(value);
+  return Math.max(0, Math.min(Number.isFinite(number) ? number : fallback, 1));
+}
+function runtimeAudioVolume(kind, local, assetVolume) {
+  const master = runtimeAudioGain(runtimeAudioMixer.master, 1);
+  const bus = kind === "music" ? (runtimeAudioMixer.muteMusic ? 0 : runtimeAudioGain(runtimeAudioMixer.music, .85)) : (runtimeAudioMixer.muteSfx ? 0 : runtimeAudioGain(runtimeAudioMixer.sfx, 1));
+  return runtimeAudioGain(local, 1) * runtimeAudioGain(assetVolume, 1) * master * bus;
+}
+function resolvedSceneAudio() {
+  const record = pm.audio || {};
+  const asset = record.assetId ? runtimeAudioAsset(record.assetId) : null;
+  return asset && asset.dataUrl ? Object.assign({}, record, { dataUrl:asset.dataUrl, name:asset.name, kind:asset.kind, assetVolume:asset.volume }) : Object.assign({}, record, { kind:"music", assetVolume:1 });
+}
+function stopSceneAudio() {
+  sceneAudioGeneration += 1;
+  sceneAudioPending = false;
+  if (sceneAudio) {
+    sceneAudio.pause();
+    sceneAudio.removeAttribute("src");
+    sceneAudio = null;
+  }
+}
+function startSceneAudio() {
+  stopSceneAudio();
+  const audio = resolvedSceneAudio();
+  if (!audio.dataUrl) return false;
+  const generation = sceneAudioGeneration;
+  sceneAudio = new Audio(audio.dataUrl);
+  sceneAudio.loop = audio.loop !== false;
+  sceneAudio.volume = runtimeAudioVolume("music", audio.volume, audio.assetVolume);
+  const unlockedWhenStarted = runtimeAudioUnlocked;
+  const attempt = sceneAudio.play();
+  if (attempt && typeof attempt.catch === "function") attempt.catch(() => {
+    if (generation !== sceneAudioGeneration || unlockedWhenStarted) return;
+    if (runtimeAudioUnlocked) startSceneAudio();
+    else sceneAudioPending = true;
+  });
+  return true;
+}
+function stopEffectAudio(audio) {
+  if (!audio) return;
+  audio.dataset.audioStopped = "true";
+  audio.pause();
+  audio.removeAttribute("src");
+  effectAudios.delete(audio);
+}
+function startRuntimeAudioRequest(request, allowQueue = true) {
+  const asset = runtimeAudioAsset(request.assetId);
+  if (!asset || !asset.dataUrl) return false;
+  while (effectAudios.size >= 32) stopEffectAudio(effectAudios.values().next().value);
+  const audio = new Audio(asset.dataUrl);
+  audio.loop = request.loop === true;
+  audio.dataset.audioKind = asset.kind === "music" ? "music" : "sfx";
+  audio.dataset.audioStopped = "false";
+  audio.volume = runtimeAudioVolume(audio.dataset.audioKind, request.volume, asset.volume);
+  effectAudios.add(audio);
+  const cleanup = () => effectAudios.delete(audio);
+  audio.addEventListener("ended", cleanup, { once:true });
+  audio.addEventListener("error", cleanup, { once:true });
+  const unlockedWhenStarted = runtimeAudioUnlocked;
+  const attempt = audio.play();
+  if (attempt && typeof attempt.catch === "function") attempt.catch(() => {
+    cleanup();
+    if (audio.dataset.audioStopped === "true" || !allowQueue || unlockedWhenStarted) return;
+    if (runtimeAudioUnlocked) startRuntimeAudioRequest(request, false);
+    else if (pendingEffectAudio.length < 32) pendingEffectAudio.push(request);
+  });
+  return true;
+}
+function playRuntimeAudio(assetId, volume, loop) {
+  return startRuntimeAudioRequest({ assetId, volume:volume == null ? 1 : volume, loop:loop === true });
+}
+function unlockRuntimeAudio() {
+  const alreadyUnlocked = runtimeAudioUnlocked;
+  runtimeAudioUnlocked = true;
+  if (sceneAudioPending || (!alreadyUnlocked && sceneAudio && sceneAudio.paused)) startSceneAudio();
+  const queued = pendingEffectAudio.splice(0, pendingEffectAudio.length);
+  queued.forEach(request => startRuntimeAudioRequest(request, false));
+}
+function stopRuntimeAudio(scope) {
+  const chosenScope = ["all", "music", "sfx"].includes(scope) ? scope : "all";
+  pendingEffectAudio = pendingEffectAudio.filter(request => {
+    if (chosenScope === "all") return false;
+    const asset = runtimeAudioAsset(request.assetId);
+    const kind = asset?.kind === "music" ? "music" : "sfx";
+    return kind !== chosenScope;
+  });
+  effectAudios.forEach(audio => {
+    if (chosenScope !== "all" && audio.dataset.audioKind !== chosenScope) return;
+    stopEffectAudio(audio);
+  });
+  if (chosenScope === "all" || chosenScope === "music") {
+    sceneAudioPending = false;
+    stopSceneAudio();
+  }
+}
+function loadRuntimeScene(sceneId, announce = true, entry = null) {
+  const scene = runtimeScenes.find(item => item.id === sceneId);
+  if (!scene) return false;
+  currentSceneId = scene.id;
+  pm = Object.assign({}, rootPlayMode, scene);
+  props = Array.isArray(pm.props) ? pm.props : [];
+  visualLayers = Array.isArray(pm.visualLayers) ? pm.visualLayers : [];
+  sceneLayers = visualLayers.filter(layer => layer && ["background", "foreground", "overlay"].includes(layer.role));
+  ui = Object.assign({ dialogueBoxColor:"rgba(15,15,15,0.94)", dialogueInkColor:"#f7f0da", dialogueBorderColor:"#f7f0da", dialogueBorderWidth:4, dialogueFont:"system-ui, sans-serif", dialogueNameSize:16, dialogueTextSize:15, dialogueMargin:0.035, dialogueBoxHeight:0.28, dialoguePortrait:true, dialogueCounter:true }, GAME.playUi || pm.ui || {});
+  canvas.width = Math.max(160, Math.min(Number(pm.sceneWidth) || GAME.exportWidth || 640, 4096));
+  canvas.height = Math.max(120, Math.min(Number(pm.sceneHeight) || GAME.exportHeight || 360, 2160));
+  syncStageSize();
+  ctx.imageSmoothingEnabled = false;
+  actor.x = 24;
+  actor.y = groundY() - actorRect().h;
+  actor.vx = 0;
+  actor.vy = 0;
+  actor.grounded = true;
+  cameraX = 0;
+  if (entry) {
+    const metrics = actorMetrics();
+    if (entry.x != null && Number.isFinite(Number(entry.x))) actor.x = Math.max(0, Math.min(worldWidth() - metrics.w, Number(entry.x)));
+    if (entry.y != null && Number.isFinite(Number(entry.y))) actor.y = Math.max(0, Math.min(groundY() - metrics.h, Number(entry.y)));
+    cameraX = Math.max(0, Math.min(worldWidth() - canvas.width, actor.x - Math.round(canvas.width * .3)));
+  }
+  dialogueActive = false;
+  activeCharacterId = "";
+  nodeEntered.clear();
+  transitionCooldownUntil = performance.now() + 400;
+  lastFrameTime = 0;
+  startSceneAudio();
+  if (gameStatus) gameStatus.textContent = "Scene: " + (scene.name || "Scene") + ".";
+  if (announce) runNodeEvent("sceneStart", { sceneId:scene.id, sceneName:scene.name || "Scene" });
+  return true;
+}
+function readGamepad() {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  const pad = Array.from(pads || []).find(Boolean);
+  if (!pad) return { left:false, right:false, jump:false, interact:false };
+  return {
+    left:Number(pad.axes?.[0] || 0) < -.35 || pad.buttons?.[14]?.pressed === true,
+    right:Number(pad.axes?.[0] || 0) > .35 || pad.buttons?.[15]?.pressed === true,
+    jump:pad.buttons?.[0]?.pressed === true || pad.buttons?.[12]?.pressed === true,
+    interact:pad.buttons?.[1]?.pressed === true || pad.buttons?.[2]?.pressed === true
+  };
+}
+function loadImageRecord(src, target, id) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => { target[id] = img; resolve(); };
+    img.onerror = resolve;
+    img.src = src;
+  });
+}
+function loadImages() {
+  const tasks = Object.entries(GAME.frames || {}).map(([id, src]) => loadImageRecord(src, images, id));
+  ["actor", "object"].forEach(kind => Object.entries(spriteFrames[kind] || {}).forEach(([id, record]) => {
+    if (record?.dataUrl) tasks.push(loadImageRecord(record.dataUrl, spriteImages[kind], id));
+  }));
+  return Promise.all(tasks);
+}
+function scale() { return Math.max(0.5, Math.min(Number(pm.actorScale) || 3, 32)); }
+function worldWidth() { return Math.max(canvas.width, Math.min(Number(pm.worldWidth) || Math.max(1600, canvas.width), 20000)); }
+function groundY() { return Math.max(32, Math.min(Number(pm.groundY) || canvas.height - 48, canvas.height - 8)); }
+function screenX(x) { return Math.round(x - cameraX); }
+function rectsOverlap(a, b) { return CORE.rectsOverlap(a, b); }
+function expandedRect(rect, pad) { return { x:rect.x - pad, y:rect.y - pad, w:rect.w + pad * 2, h:rect.h + pad * 2 }; }
+function spriteRecord(frame, actorOnly = false) {
+  const kind = actorOnly ? "actor" : "object";
+  return spriteFrames[kind]?.[String(frame)] || null;
+}
+function spriteMetrics(frame, spriteScale, actorOnly = false) {
+  const record = spriteRecord(frame, actorOnly);
+  const sourceWidth = Math.max(1, Number(record?.sw) || artW);
+  const sourceHeight = Math.max(1, Number(record?.sh) || artH);
+  const factor = actorOnly ? Math.max(0.01, Math.min(Number(record?.scaleFactor) || 1, 1)) : 1;
+  const chosenScale = Math.max(0.5, Math.min(Number(spriteScale) || 1, 32));
+  return {
+    sx:Math.max(0, Number(record?.sx) || 0),
+    sy:Math.max(0, Number(record?.sy) || 0),
+    sw:sourceWidth,
+    sh:sourceHeight,
+    w:Math.max(1, Math.round(sourceWidth * chosenScale * factor)),
+    h:Math.max(1, Math.round(sourceHeight * chosenScale * factor)),
+    image:spriteImages[actorOnly ? "actor" : "object"]?.[String(frame)] || images[String(frame)] || null,
+    cropped:Boolean(record)
+  };
+}
+function actorMetrics(frame = pm.idleFrame, poseField = "voxelIdlePoseId") {
+  if (rootPlayMode.voxelActorAssetId) {
+    const metrics = VOXEL.metrics(rootPlayMode.voxelAssets || [], { voxelAssetId: rootPlayMode.voxelActorAssetId, voxelPoseId: rootPlayMode[poseField] || "", voxelYaw: 0, scale: scale() }, document);
+    if (metrics) return { ...metrics, sx: 0, sy: 0, sw: metrics.canvas.width, sh: metrics.canvas.height, cropped: false, voxel: true };
+  }
+  return spriteMetrics(frame, scale(), true);
+}
+function objectMetrics(frame, spriteScale) { return spriteMetrics(frame, spriteScale, false); }
+function actorRect(x = actor.x, y = actor.y) { const metrics = actorMetrics(); return { x, y, w:metrics.w, h:metrics.h }; }
+function voxelPropMetrics(prop) { return VOXEL.metrics(rootPlayMode.voxelAssets || [], prop, document); }
+function propRect(prop) { const s = Math.max(1, Math.min(Number(prop.scale) || scale(), 16)); const metrics = voxelPropMetrics(prop) || objectMetrics(Number(prop.frame) || 0, s); return { x:Number(prop.x) || 0, y:Number(prop.y) || 0, w:metrics.w, h:metrics.h }; }
+function clampActor() { const ar = actorRect(); actor.x = Math.max(0, Math.min(worldWidth() - ar.w, actor.x)); actor.y = Math.max(0, Math.min(groundY() - ar.h, actor.y)); }
+// Camera update
+function updateCamera(seconds = 0, pushActor = false) {
+  const maxCameraX = Math.max(0, worldWidth() - canvas.width);
+  const actorBox = actorRect();
+  const actorCenter = actor.x + actorBox.w / 2;
+  const previousCameraX = cameraX;
+  let target = cameraX;
+  if (pm.cameraFollow !== false) {
+    const viewLeft = cameraX;
+    const viewRight = cameraX + canvas.width;
+    const leftSafe = viewLeft + Math.max(44, canvas.width * 0.28);
+    const rightSafe = viewRight - Math.max(44, canvas.width * 0.34);
+    if (actorCenter < leftSafe) target = actorCenter - Math.max(44, canvas.width * 0.28);
+    if (actorCenter > rightSafe) target = actorCenter - canvas.width + Math.max(44, canvas.width * 0.34);
+    target = Math.max(0, Math.min(maxCameraX, target));
+    if (seconds > 0) cameraX += (target - cameraX) * CORE.smoothingAlpha(0.22, seconds);
+  }
+  if (pm.autoScroll === true && seconds > 0) {
+    const physics = CORE.physics(pm);
+    cameraX = CORE.autoScroll(cameraX, maxCameraX, physics.scrollSpeed, seconds);
+  }
+  cameraX = Math.max(0, Math.min(maxCameraX, cameraX));
+  if (pushActor && pm.autoScroll === true) {
+    const cameraDelta = cameraX - previousCameraX;
+    if (cameraDelta > 0) actor.x = Math.max(0, Math.min(worldWidth() - actorBox.w, actor.x + cameraDelta));
+  }
+}
+function drawImageFrame(frame, x, y, w, h, flip = false) {
+  const img = images[String(frame)];
+  if (!img) return;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  if (flip) { ctx.translate(x + w, y); ctx.scale(-1, 1); ctx.drawImage(img, 0, 0, w, h); }
+  else ctx.drawImage(img, x, y, w, h);
+  ctx.restore();
+}
+function drawSpriteFrame(frame, x, y, metrics, flip = false, actorOnly = false) {
+  const img = metrics?.image;
+  if (!img || !metrics) return;
+  ctx.save();
+  ctx.imageSmoothingEnabled = false;
+  if (flip) {
+    ctx.translate(x + metrics.w, y);
+    ctx.scale(-1, 1);
+    if (metrics.cropped) ctx.drawImage(img, metrics.sx, metrics.sy, metrics.sw, metrics.sh, 0, 0, metrics.w, metrics.h);
+    else ctx.drawImage(img, 0, 0, metrics.w, metrics.h);
+  } else if (metrics.cropped) ctx.drawImage(img, metrics.sx, metrics.sy, metrics.sw, metrics.sh, x, y, metrics.w, metrics.h);
+  else ctx.drawImage(img, x, y, metrics.w, metrics.h);
+  ctx.restore();
+}
+function drawSceneBase() {
+  ctx.fillStyle = GAME.sceneBackground || "#000";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+}
+function parallaxCameraX() {
+  return cameraX;
+}
+function drawLayer(layer) {
+  if (!layer || layer.visible === false || layer.frame < 0 || !images[String(layer.frame)]) return;
+  const img = images[String(layer.frame)];
+  if (layer.role === "overlay") {
+    const ratio = Math.max(canvas.width / img.width, canvas.height / img.height);
+    const w = Math.max(1, Math.round(img.width * ratio));
+    const h = Math.max(1, Math.round(img.height * ratio));
+    const x = Math.round((canvas.width - w) / 2);
+    const y = Math.round((canvas.height - h) / 2);
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, Math.min(Number(layer.opacity ?? 1), 1));
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(img, x, y, w, h);
+    ctx.restore();
+    return;
+  }
+  const sc = Math.max(0.5, Math.min(Number(layer.scale) || 3, 32));
+  const parallax = Number.isFinite(Number(layer.parallax)) ? Number(layer.parallax) : 0;
+  const opacity = Math.max(0, Math.min(Number(layer.opacity ?? 1), 1));
+  ctx.save();
+  ctx.globalAlpha = opacity;
+  ctx.imageSmoothingEnabled = false;
+  if (layer.repeatX !== false || layer.fit === "tile") {
+    const w = Math.max(1, Math.round(img.width * sc));
+    const h = Math.max(1, Math.round(img.height * sc));
+    const y = Math.round(Number.isFinite(Number(layer.y)) ? Number(layer.y) : 0);
+    const offset = ((parallaxCameraX() * parallax) % w + w) % w;
+    for (let x = -offset - w; x < canvas.width + w; x += w) ctx.drawImage(img, Math.round(x), y, w, h);
+    ctx.restore();
+    return;
+  }
+  const fit = layer.fit || "cover";
+  const ratio = fit === "stretch" ? null : fit === "contain" ? Math.min(canvas.width / img.width, canvas.height / img.height) : Math.max(canvas.width / img.width, canvas.height / img.height);
+  const w = fit === "stretch" ? canvas.width : Math.max(1, Math.round(img.width * ratio));
+  const h = fit === "stretch" ? canvas.height : Math.max(1, Math.round(img.height * ratio));
+  const x = Math.round((canvas.width - w) / 2 - parallaxCameraX() * parallax);
+  const y = Number.isFinite(Number(layer.y)) ? Math.round(Number(layer.y)) : (fit === "stretch" ? 0 : Math.round((canvas.height - h) / 2));
+  const shouldRepeatCover = fit !== "stretch" && layer.repeatX === true;
+  if (shouldRepeatCover) {
+    const offset = ((parallaxCameraX() * parallax - (canvas.width - w) / 2) % w + w) % w;
+    for (let drawX = -offset - w; drawX < canvas.width + w; drawX += w) ctx.drawImage(img, Math.round(drawX), y, w, h);
+  } else {
+    ctx.drawImage(img, x, y, w, h);
+  }
+  ctx.restore();
+}
+function drawTiledImage(img, y, sc, parallax, opacity = 1) {
+  const w = Math.max(1, Math.round(img.width * sc));
+  const h = Math.max(1, Math.round(img.height * sc));
+  const offset = ((parallaxCameraX() * parallax) % w + w) % w;
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, Math.min(Number(opacity ?? 1), 1));
+  ctx.imageSmoothingEnabled = false;
+  for (let x = -offset - w; x < canvas.width + w; x += w) ctx.drawImage(img, Math.round(x), Math.round(y), w, h);
+  ctx.restore();
+}
+function drawRepeatedImage(img, y, w, h, parallax, opacity = 1) {
+  const offset = ((parallaxCameraX() * parallax) % w + w) % w;
+  ctx.save();
+  ctx.globalAlpha = Math.max(0, Math.min(Number(opacity ?? 1), 1));
+  ctx.imageSmoothingEnabled = false;
+  for (let x = -offset - w; x < canvas.width + w; x += w) ctx.drawImage(img, Math.round(x), Math.round(y), w, h);
+  ctx.restore();
+}
+function drawBackground() {
+  drawSceneBase();
+  const bg = Number(pm.backgroundFrame);
+  const img = images[String(bg)];
+  if (img) {
+    const mode = pm.backgroundScale || "cover";
+    if (mode === "stretch") ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    else if (mode === "tile") drawTiledImage(img, 0, Math.max(1, scale()), 0.22, 1);
+    else {
+      const ratio = mode === "contain" ? Math.min(canvas.width / img.width, canvas.height / img.height) : Math.max(canvas.width / img.width, canvas.height / img.height);
+      const w = Math.max(1, Math.round(img.width * ratio));
+      const h = Math.max(1, Math.round(img.height * ratio));
+      const y = Math.round((canvas.height - h) / 2);
+      drawRepeatedImage(img, y, w, h, 0.08, 1);
+    }
+  }
+  const voxelBackdrop = VOXEL.findAsset(rootPlayMode.voxelAssets || [], { voxelAssetId: pm.voxelBackgroundAssetId });
+  if (voxelBackdrop) VOXEL.drawBackdrop(ctx, VOXEL.getCanvas(voxelBackdrop, pm.voxelBackgroundYaw, document, "", "background"), canvas.width, canvas.height, pm.backgroundScale, cameraX);
+  sceneLayers.filter(layer => (layer.role || "background") === "background").forEach(drawLayer);
+  const scenery = images[String(pm.sceneryFrame)];
+  if (scenery) drawTiledImage(scenery, Number(pm.sceneryY) || 0, Math.max(0.5, Math.min(Number(pm.sceneryScale) || 3, 32)), Math.max(-4, Math.min(Number(pm.scenerySpeed) || 0.45, 4)), 1);
+}
+function drawLayers(role) { sceneLayers.filter(layer => (layer.role || "background") === role).forEach(drawLayer); }
+function characters() { return (pm.dialogue && pm.dialogue.characters) || []; }
+function lines() { return (pm.dialogue && pm.dialogue.lines) || []; }
+function characterById(id) { return characters().find(c => c.id === id) || characters()[0] || {}; }
+function textLineMessage(index) { const line = lines()[Math.max(0, Number(index) || 0)] || {}; return String(line.text || ""); }
+function showNodeMessage(message, duration) { nodeMessageText = String(message || "").slice(0, 180); nodeMessageUntil = performance.now() + Math.max(900, Math.min(Number(duration) || 3600, 10000)); if (gameStatus && nodeMessageText) gameStatus.textContent = nodeMessageText; }
+function startDialogueAtLine(index, onComplete) { dialogueContinuation = typeof onComplete === "function" ? onComplete : null; dialogueActive = true; activeCharacterId = "node-editor"; dialogueLine = Math.max(0, Math.min(Number(index) || 0, Math.max(0, lines().length - 1))); revealStart = performance.now(); revealChars = 0; }
+function moveActorBy(dx, dy) { actor.x += Number(dx) || 0; actor.y += Number(dy) || 0; actor.vx = 0; actor.vy = 0; clampActor(); }
+function setNodeCheckpoint() { nodeCheckpoint = { sceneId:currentSceneId, x:actor.x, y:actor.y }; showNodeMessage("Checkpoint set.", 1200); }
+function resetActorToCheckpoint() { const cp = nodeCheckpoint; if (cp?.sceneId && cp.sceneId !== currentSceneId) loadRuntimeScene(cp.sceneId, false); const ar = actorRect(); dialogueContinuation = null; dialogueActive = false; activeCharacterId = ""; actor.x = cp && Number.isFinite(Number(cp.x)) ? Number(cp.x) : 24; actor.y = cp && Number.isFinite(Number(cp.y)) ? Number(cp.y) : groundY() - ar.h; actor.vx = 0; actor.vy = 0; actor.grounded = true; gameFinished = false; lastFrameTime = 0; clampActor(); cameraX = cp ? Math.max(0, Math.min(worldWidth() - canvas.width, actor.x - Math.round(canvas.width * .3))) : 0; if (gameStatus) gameStatus.textContent = "Returned to checkpoint."; }
+// Node runtime
+function nodeById(id) { return (nodeGraph.nodes || []).find(node => String(node.id) === String(id)); }
+function allowSceneRuleTransition() {
+  const now = performance.now();
+  sceneRuleTransitionTimes = sceneRuleTransitionTimes.filter(time => now - time < 1000);
+  if (sceneRuleTransitionTimes.length >= 12) return false;
+  sceneRuleTransitionTimes.push(now);
+  return true;
+}
+function executeNode(id, seen) {
+  const node = nodeById(id);
+  if (!node || seen.has(String(id)) || seen.size > 40) return;
+  seen.add(String(id));
+  const result = RULES.evaluateNode(node, { variables:nodeVariables, inventory:nodeInventory });
+  if (!result) return;
+  nodeVariables = result.state.variables;
+  nodeInventory = result.state.inventory;
+  let dialogueStarted = false;
+  result.effects.forEach(effect => {
+    if (effect.type === "message") showNodeMessage(Number(effect.textLine) >= 0 ? textLineMessage(effect.textLine) || effect.message || node.name : effect.message || node.name || "Message");
+    if (effect.type === "dialogue") {
+      dialogueStarted = true;
+      startDialogueAtLine(effect.line, effect.continuationId ? () => executeNode(effect.continuationId, seen) : null);
+    }
+    if (effect.type === "checkpoint") setNodeCheckpoint();
+    if (effect.type === "moveActor") moveActorBy(effect.dx, effect.dy);
+    if (effect.type === "finish") { showNodeMessage(effect.message || "Finished."); gameFinished = true; actor.vx = 0; actor.vy = 0; }
+    if (effect.type === "scene") {
+      if (effect.sceneId && allowSceneRuleTransition()) loadRuntimeScene(effect.sceneId, true);
+      else if (effect.sceneId) showNodeMessage("Scene transition loop stopped.", 2200);
+    }
+    if (effect.type === "playSound") playRuntimeAudio(effect.assetId, effect.volume, effect.loop);
+    if (effect.type === "stopSound") stopRuntimeAudio(effect.scope);
+  });
+  if (!dialogueStarted && result.nextId) window.setTimeout(() => executeNode(result.nextId, seen), result.delayMs);
+}
+function runNodeEvent(type, payload) {
+  (nodeGraph.nodes || []).filter(node => RULES.eventMatches(node, type, payload, currentSceneId)).forEach(node => executeNode(node.next || "", new Set([String(node.id)])));
+}
+function syncNodeTriggers() {
+  const actorTouch = expandedRect(actorRect(), 8);
+  const entered = new Set();
+  const fired = new Set();
+  props.forEach((prop, index) => {
+    if (!rectsOverlap(actorTouch, propRect(prop))) return;
+    const triggerId = String(prop.nodeTriggerId || "prop-" + (index + 1));
+    const ids = [triggerId, "prop-" + (index + 1), "prop-" + index, "any"];
+    ids.forEach(id => entered.add(id));
+    if (!nodeEntered.has(triggerId) && !fired.has(triggerId)) {
+      fired.add(triggerId);
+      runNodeEvent("triggerEnter", { id:triggerId, name:triggerId, ids, prop });
+    }
+  });
+  nodeEntered = entered;
+}
+function startDialogue(character) {
+  if (!character) return;
+  dialogueContinuation = null;
+  dialogueActive = true;
+  activeCharacterId = character.id || "";
+  dialogueLine = Math.max(0, Math.min(Number(character.startLine) || 0, Math.max(0, lines().length - 1)));
+  revealStart = performance.now();
+  revealChars = 0;
+}
+function activeInteractionCharacter() {
+  const box = actorRect();
+  const reach = Math.max(28, box.w);
+  const near = { x:box.x - reach, y:box.y - reach / 2, w:box.w + reach * 2, h:box.h + reach };
+  let best = null;
+  let bestDist = Infinity;
+  props.forEach(prop => {
+    if (!prop.dialogueCharacterId) return;
+    const c = characterById(prop.dialogueCharacterId);
+    const r = propRect(prop);
+    if (!rectsOverlap(near, r)) return;
+    const dist = Math.abs((r.x + r.w / 2) - (box.x + box.w / 2));
+    if (dist < bestDist) { best = c; bestDist = dist; }
+  });
+  if (best) return best;
+  const actorCenter = actor.x + box.w / 2;
+  const slots = { left:0.24, center:0.5, right:0.76 };
+  standaloneCharacters().forEach(character => {
+    const worldX = worldWidth() * (slots[character.position] || 0.5);
+    const dist = Math.abs(worldX - actorCenter);
+    if (dist < bestDist) { best = character; bestDist = dist; }
+  });
+  return best && bestDist <= Math.max(96, canvas.width * .2) ? best : null;
+}
+function interactionCharacters() { return characters().filter(c => c && c.role !== "actor" && c.visible !== false); }
+function standaloneCharacters() {
+  const assigned = new Set(props.map(prop => prop.dialogueCharacterId).filter(Boolean));
+  return interactionCharacters().filter(character => !assigned.has(character.id));
+}
+function drawSceneCharacters() {
+  const slots = { left:0.24, center:0.5, right:0.76 };
+  const ground = groundY();
+  standaloneCharacters().forEach(character => {
+    const sc = Math.max(1, Math.min(Number(character.scale) || 3, 16));
+    const metrics = objectMetrics(character.frame, sc);
+    if (!metrics.image) return;
+    const worldX = worldWidth() * (slots[character.position] || 0.5) - metrics.w / 2;
+    const x = screenX(worldX);
+    const y = Math.round(ground - metrics.h);
+    drawSpriteFrame(character.frame, x, y, metrics, Boolean(character.flip), false);
+  });
+}
+function runCharacterInteraction() {
+  const character = activeInteractionCharacter();
+  if (!character) return;
+  const matching = (nodeGraph.nodes || []).filter(node => RULES.eventMatches(node, "characterInteract", { id: character.id, name: character.name }, currentSceneId));
+  if (matching.length) {
+    matching.forEach(node => executeNode(node.next || "", new Set([String(node.id)])));
+    return;
+  }
+  startDialogue(character);
+}
+function advanceDialogue() {
+  if (!dialogueActive) { runCharacterInteraction(); return; }
+  const line = lines()[dialogueLine] || {};
+  const len = String(line.text || "").length;
+  if (revealChars < len) { revealChars = len; return; }
+  const nextLine = Number(line.nextLine);
+  if (Number.isFinite(nextLine) && nextLine >= 0 && nextLine < lines().length) { dialogueLine = nextLine; revealStart = performance.now(); revealChars = 0; }
+  else { const complete = dialogueContinuation; dialogueContinuation = null; dialogueActive = false; activeCharacterId = ""; if (typeof complete === "function") window.setTimeout(complete, 0); }
+}
+function drawDialogue() {
+  if (!dialogueActive || !lines().length) return;
+  const line = lines()[dialogueLine] || {};
+  const ch = characterById(line.characterId || activeCharacterId);
+  const text = String(line.text || "");
+  if ((pm.dialogue || {}).typewriter === false) revealChars = text.length;
+  else revealChars = Math.min(text.length, Math.max(revealChars, Math.floor((performance.now() - revealStart) / 22)));
+  const margin = Math.max(8, Math.round(canvas.width * (Number(ui.dialogueMargin) || .035)));
+  const boxH = Math.max(72, Math.round(canvas.height * (Number(ui.dialogueBoxHeight) || .28)));
+  const boxY = canvas.height - boxH - margin;
+  const portrait = ui.dialoguePortrait !== false ? Math.max(44, Math.min(120, boxH - 28)) : 0;
+  ctx.fillStyle = ui.dialogueBoxColor || "rgba(15,15,15,.94)";
+  ctx.strokeStyle = ui.dialogueBorderColor || ui.dialogueInkColor || "#f7f0da";
+  ctx.lineWidth = Math.max(0, Math.min(Number(ui.dialogueBorderWidth) || 4, 16));
+  ctx.fillRect(margin, boxY, canvas.width - margin * 2, boxH);
+  ctx.strokeRect(margin, boxY, canvas.width - margin * 2, boxH);
+  if (ui.dialoguePortrait !== false) {
+    const portraitFrame = line.frame ?? ch.frame ?? 0;
+    const portraitMetrics = objectMetrics(portraitFrame, 1);
+    drawSpriteFrame(portraitFrame, margin + 12, boxY + 14, Object.assign({}, portraitMetrics, { w:portrait, h:portrait }), false, false);
+  }
+  ctx.fillStyle = ui.dialogueInkColor || "#f7f0da";
+  ctx.font = "900 " + Math.max(8, Math.min(Number(ui.dialogueNameSize) || 16, 32)) + "px " + (ui.dialogueFont || "system-ui, sans-serif");
+  const textX = margin + (ui.dialoguePortrait !== false ? portrait + 28 : 16);
+  ctx.fillText(line.speaker || ch.name || "Character", textX, boxY + 28);
+  ctx.font = "800 " + Math.max(8, Math.min(Number(ui.dialogueTextSize) || 15, 30)) + "px " + (ui.dialogueFont || "system-ui, sans-serif");
+  const maxTextWidth = canvas.width - textX - margin - 16;
+  const wrapped = [];
+  text.slice(0, revealChars).split(/\r?\n/).forEach(sourceLine => {
+    const words = sourceLine.split(/\s+/).filter(Boolean);
+    let row = "";
+    words.forEach(word => {
+      const test = row ? row + " " + word : word;
+      if (ctx.measureText(test).width <= maxTextWidth || !row) { row = test; return; }
+      wrapped.push(row);
+      row = word;
+      while (ctx.measureText(row).width > maxTextWidth && row.length > 1) {
+        let cut = row.length - 1;
+        while (cut > 1 && ctx.measureText(row.slice(0, cut)).width > maxTextWidth) cut--;
+        wrapped.push(row.slice(0, cut));
+        row = row.slice(cut);
+      }
+    });
+    wrapped.push(row);
+  });
+  ctx.textBaseline = "alphabetic";
+  wrapped.slice(0, 4).forEach((part, i) => ctx.fillText(part || " ", textX, boxY + 56 + i * Math.round((Number(ui.dialogueTextSize) || 15) * 1.45)));
+  if (ui.dialogueCounter !== false) {
+    ctx.font = "900 12px " + (ui.dialogueFont || "system-ui, sans-serif");
+    ctx.fillText((dialogueLine + 1) + "/" + lines().length, canvas.width - margin - 44, boxY + boxH - 14);
+  }
+}
+function drawNodeMessage() {
+  if (!nodeMessageText || performance.now() > nodeMessageUntil) return;
+  const margin = 12;
+  const y = 38;
+  const boxH = 48;
+  ctx.fillStyle = "rgba(15,15,15,.94)";
+  ctx.strokeStyle = ui.dialogueBorderColor || ui.dialogueInkColor || "#f7f0da";
+  ctx.lineWidth = 4;
+  ctx.fillRect(margin, y, canvas.width - margin * 2, boxH);
+  ctx.strokeRect(margin, y, canvas.width - margin * 2, boxH);
+  ctx.fillStyle = ui.dialogueInkColor || "#f7f0da";
+  ctx.font = "900 15px " + (ui.dialogueFont || "system-ui, sans-serif");
+  const words = nodeMessageText.split(/\s+/).filter(Boolean);
+  const rows = [];
+  let row = "";
+  words.forEach(word => {
+    const test = row ? row + " " + word : word;
+    if (ctx.measureText(test).width > canvas.width - margin * 2 - 20 && row) { rows.push(row); row = word; }
+    else row = test;
+  });
+  if (row) rows.push(row);
+  rows.slice(0, 2).forEach((part, index) => ctx.fillText(part, margin + 10, y + 21 + index * 17));
+}
+function draw() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.globalAlpha = 1;
+  drawBackground();
+  ctx.globalAlpha = 1;
+  const drawObjectsAtDepth = front => props.forEach(prop => {
+    if ((prop.voxelInFront === true) !== front) return;
+    const propScale = Math.max(1, Math.min(Number(prop.scale) || scale(), 16));
+    const voxelMetrics = voxelPropMetrics(prop);
+    const metrics = voxelMetrics || objectMetrics(Number(prop.frame) || 0, propScale);
+    const x = screenX(Number(prop.x) || 0);
+    if (x + metrics.w < -8 || x > canvas.width + 8) return;
+    ctx.globalAlpha = propOpen(prop) ? 0.28 : 1;
+    if (voxelMetrics) ctx.drawImage(voxelMetrics.canvas, x, Math.round(Number(prop.y) || 0), metrics.w, metrics.h);
+    else drawSpriteFrame(prop.frame, x, Math.round(Number(prop.y) || 0), metrics, false, false);
+  });
+  drawObjectsAtDepth(false);
+  ctx.globalAlpha = 1;
+  drawSceneCharacters();
+  ctx.globalAlpha = 1;
+  const moving = Math.abs(actor.vx) > .08;
+  const frame = !actor.grounded ? pm.jumpFrame : moving ? pm.walkFrame : pm.idleFrame;
+  const poseField = !actor.grounded ? "voxelJumpPoseId" : moving ? "voxelWalkPoseId" : "voxelIdlePoseId";
+  const metrics = actorMetrics(frame, poseField);
+  const baseMetrics = actorMetrics();
+  const actorY = Math.round(actor.y + baseMetrics.h - metrics.h);
+  if (metrics.voxel) {
+    ctx.save();
+    if (actor.facing < 0) { ctx.translate(screenX(actor.x) + metrics.w, actorY); ctx.scale(-1, 1); ctx.drawImage(metrics.canvas, 0, 0, metrics.w, metrics.h); }
+    else ctx.drawImage(metrics.canvas, screenX(actor.x), actorY, metrics.w, metrics.h);
+    ctx.restore();
+  } else drawSpriteFrame(frame, screenX(actor.x), actorY, metrics, actor.facing < 0, true);
+  drawObjectsAtDepth(true);
+  ctx.globalAlpha = 1;
+  drawLayers("foreground");
+  drawLayers("overlay");
+  drawDialogue();
+  drawNodeMessage();
+}
+function step(now = performance.now()) {
+  const seconds = CORE.frameDelta(now, lastFrameTime);
+  lastFrameTime = now;
+  const baseMetrics = actorMetrics();
+  const w = baseMetrics.w;
+  const h = baseMetrics.h;
+  const gamepad = readGamepad();
+  const left = keys.ArrowLeft || keys.KeyA || gamepad.left;
+  const right = keys.ArrowRight || keys.KeyD || gamepad.right;
+  const jump = keys.Space || keys.ArrowUp || keys.KeyW || gamepad.jump;
+  if (gamepad.interact && !gamepadInteractPressed) advanceDialogue();
+  gamepadInteractPressed = gamepad.interact;
+  if (gameFinished) { actor.vx = 0; actor.vy = 0; draw(); requestAnimationFrame(step); return; }
+  const physics = CORE.physics(pm);
+  actor.vx = dialogueActive ? 0 : right && !left ? physics.moveSpeed : left && !right ? -physics.moveSpeed : 0;
+  if (actor.vx) actor.facing = actor.vx > 0 ? 1 : -1;
+  if (jump && actor.grounded && !dialogueActive) { actor.vy = -physics.jumpSpeed; actor.grounded = false; }
+  actor.vy = CORE.advanceVelocity(actor.vy, physics.gravity, seconds);
+  actor.grounded = false;
+  actor.x = Math.max(0, Math.min(worldWidth() - w, CORE.advanceAxis(actor.x, actor.vx, seconds)));
+  let box = actorRect();
+  const portal = now >= transitionCooldownUntil ? props.find(prop => prop?.targetSceneId && rectsOverlap(box, propRect(prop))) : null;
+  if (portal && loadRuntimeScene(portal.targetSceneId, true, { x:portal.targetX, y:portal.targetY })) { requestAnimationFrame(step); return; }
+  solidRuntimeProps().forEach(prop => { const r = propRect(prop); if (!rectsOverlap(box, r)) return; if (actor.vx > 0) actor.x = r.x - w; if (actor.vx < 0) actor.x = r.x + r.w; actor.vx = 0; box = actorRect(); });
+  actor.y = CORE.advanceAxis(actor.y, actor.vy, seconds);
+  box = actorRect();
+  solidRuntimeProps().forEach(prop => { const r = propRect(prop); if (!rectsOverlap(box, r)) return; if (actor.vy > 0) { actor.y = r.y - h; actor.grounded = true; } if (actor.vy < 0) actor.y = r.y + r.h; actor.vy = 0; box = actorRect(); });
+  if (actor.y + h >= groundY()) { actor.y = groundY() - h; actor.vy = 0; actor.grounded = true; }
+  updateCamera(seconds, true);
+  tick++;
+  syncNodeTriggers();
+  draw();
+  requestAnimationFrame(step);
+}
+canvas.addEventListener("pointerdown", unlockRuntimeAudio);
+window.addEventListener("keydown", event => { unlockRuntimeAudio(); if (["ArrowLeft", "ArrowRight", "ArrowUp", "Space"].includes(event.code)) event.preventDefault(); if (event.code === "KeyR") { event.preventDefault(); resetActorToCheckpoint(); return; } if (gameFinished) { if (event.code === "KeyE" || event.code === "Enter") event.preventDefault(); return; } if (event.code === "KeyE" || event.code === "Enter") { event.preventDefault(); advanceDialogue(); return; } keys[event.code] = true; });
+window.addEventListener("keyup", event => { keys[event.code] = false; });
+window.addEventListener("pagehide", () => stopRuntimeAudio("all"), { once:true });
+loadImages().then(() => { if (runtimeScenes.length) loadRuntimeScene(currentSceneId, false); else startSceneAudio(); const h = actorMetrics().h; actor.y = groundY() - h; canvas.focus(); runNodeEvent("sceneStart", { sceneId:currentSceneId }); requestAnimationFrame(step); });
+</script>
+</body>
+</html>
