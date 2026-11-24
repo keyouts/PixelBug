@@ -1,0 +1,1714 @@
+{
+  "format": "pixel-bug-package",
+  "packageVersion": 2,
+  "encoding": "rle1",
+  "audio": [],
+  "project": {
+    "name": "Hybrid Worlds - Editable Starter",
+    "width": 16,
+    "height": 24,
+    "size": 24,
+    "palette": [
+      "#27263f",
+      "#f6dfab",
+      "#7ba48c",
+      "#b2a5d8",
+      "#8d80bd",
+      "#d99a76",
+      "#d1b58c",
+      "#a96467",
+      "#9ec0d4",
+      "#d4bc79",
+      "#cad9c8",
+      "#aacbcc"
+    ],
+    "activePalettePreset": 0,
+    "palettePresets": [
+      {
+        "name": "Demo Palette",
+        "colors": [
+          "#27263f",
+          "#f6dfab",
+          "#7ba48c",
+          "#b2a5d8",
+          "#8d80bd",
+          "#d99a76",
+          "#d1b58c",
+          "#a96467",
+          "#9ec0d4",
+          "#d4bc79",
+          "#cad9c8",
+          "#aacbcc"
+        ]
+      }
+    ],
+    "activeFrame": 0,
+    "activeLayer": 0,
+    "layerGroups": [],
+    "frames": [
+      {
+        "duration": 120,
+        "tag": "Idle",
+        "layers": [
+          {
+            "name": "Actor",
+            "visible": true,
+            "opacity": 1,
+            "blendMode": "source-over",
+            "groupId": null,
+            "alphaLock": false,
+            "clipping": false,
+            "linkedFrame": -1,
+            "linkedLayer": -1,
+            "pixels": {
+              "$pixels": "rle1",
+              "width": 16,
+              "height": 24,
+              "values": [
+                null,
+                "#f6dfab",
+                "#27263f"
+              ],
+              "runs": [
+                4,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                8,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                20,
+                0
+              ]
+            },
+            "sourceWidth": 16,
+            "sourceHeight": 24,
+            "sourcePixels": {
+              "$pixels": "rle1",
+              "width": 16,
+              "height": 24,
+              "values": [
+                null,
+                "#f6dfab",
+                "#27263f"
+              ],
+              "runs": [
+                4,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                8,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                20,
+                0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "duration": 120,
+        "tag": "Walk",
+        "layers": [
+          {
+            "name": "Actor",
+            "visible": true,
+            "opacity": 1,
+            "blendMode": "source-over",
+            "groupId": null,
+            "alphaLock": false,
+            "clipping": false,
+            "linkedFrame": -1,
+            "linkedLayer": -1,
+            "pixels": {
+              "$pixels": "rle1",
+              "width": 16,
+              "height": 24,
+              "values": [
+                null,
+                "#f6dfab",
+                "#27263f"
+              ],
+              "runs": [
+                4,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                8,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                6,
+                2,
+                10,
+                0,
+                6,
+                2,
+                10,
+                0,
+                6,
+                2,
+                2,
+                0,
+                3,
+                2,
+                5,
+                0,
+                6,
+                2,
+                2,
+                0,
+                3,
+                2,
+                13,
+                0,
+                3,
+                2,
+                2,
+                0
+              ]
+            },
+            "sourceWidth": 16,
+            "sourceHeight": 24,
+            "sourcePixels": {
+              "$pixels": "rle1",
+              "width": 16,
+              "height": 24,
+              "values": [
+                null,
+                "#f6dfab",
+                "#27263f"
+              ],
+              "runs": [
+                4,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                8,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                6,
+                2,
+                10,
+                0,
+                6,
+                2,
+                10,
+                0,
+                6,
+                2,
+                2,
+                0,
+                3,
+                2,
+                5,
+                0,
+                6,
+                2,
+                2,
+                0,
+                3,
+                2,
+                13,
+                0,
+                3,
+                2,
+                2,
+                0
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "duration": 120,
+        "tag": "Jump",
+        "layers": [
+          {
+            "name": "Actor",
+            "visible": true,
+            "opacity": 1,
+            "blendMode": "source-over",
+            "groupId": null,
+            "alphaLock": false,
+            "clipping": false,
+            "linkedFrame": -1,
+            "linkedLayer": -1,
+            "pixels": {
+              "$pixels": "rle1",
+              "width": 16,
+              "height": 24,
+              "values": [
+                null,
+                "#f6dfab",
+                "#27263f"
+              ],
+              "runs": [
+                4,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                8,
+                0,
+                9,
+                2,
+                6,
+                0,
+                11,
+                2,
+                5,
+                0,
+                11,
+                2,
+                5,
+                0,
+                11,
+                2,
+                5,
+                0,
+                11,
+                2,
+                5,
+                0,
+                11,
+                2,
+                6,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                20,
+                0
+              ]
+            },
+            "sourceWidth": 16,
+            "sourceHeight": 24,
+            "sourcePixels": {
+              "$pixels": "rle1",
+              "width": 16,
+              "height": 24,
+              "values": [
+                null,
+                "#f6dfab",
+                "#27263f"
+              ],
+              "runs": [
+                4,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                9,
+                0,
+                7,
+                1,
+                8,
+                0,
+                9,
+                2,
+                6,
+                0,
+                11,
+                2,
+                5,
+                0,
+                11,
+                2,
+                5,
+                0,
+                11,
+                2,
+                5,
+                0,
+                11,
+                2,
+                5,
+                0,
+                11,
+                2,
+                6,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                7,
+                0,
+                9,
+                2,
+                20,
+                0
+              ]
+            }
+          }
+        ]
+      }
+    ],
+    "animation": {
+      "activeClipId": "clip-main",
+      "clips": [
+        {
+          "id": "clip-main",
+          "name": "Actor animation",
+          "start": 0,
+          "end": 2,
+          "loop": "loop"
+        }
+      ]
+    },
+    "playMode": {
+      "worldType": "sidescroller",
+      "activeSceneId": "scene-a",
+      "sceneWidth": 640,
+      "sceneHeight": 360,
+      "worldWidth": 1000,
+      "groundY": 316,
+      "actorScale": 2,
+      "idleFrame": 0,
+      "walkFrame": 1,
+      "jumpFrame": 2,
+      "cameraFollow": true,
+      "showGridOverlay": true,
+      "moveSpeed": 4,
+      "jumpStrength": 8,
+      "gravity": 0.45,
+      "voxelWorld": {
+        "width": 16,
+        "depth": 16,
+        "height": 12,
+        "cellSize": 38,
+        "yaw": 0,
+        "cameraAngle": 0,
+        "cameraTilt": 0.5,
+        "turntable": false,
+        "markers": [
+          {
+            "id": "portal",
+            "kind": "trigger",
+            "x": 7,
+            "y": 0,
+            "z": 7,
+            "name": "portal",
+            "triggerId": "portal",
+            "characterId": ""
+          }
+        ],
+        "start": {
+          "x": 7.5,
+          "y": 0,
+          "z": 7.5
+        },
+        "blocks": []
+      },
+      "scenes": [
+        {
+          "id": "scene-a",
+          "name": "Side-scroller courtyard",
+          "worldType": "sidescroller",
+          "voxelWorld": {
+            "width": 16,
+            "depth": 16,
+            "height": 12,
+            "cellSize": 38,
+            "yaw": 0,
+            "cameraAngle": 0,
+            "cameraTilt": 0.5,
+            "turntable": false,
+            "markers": [
+              {
+                "id": "portal",
+                "kind": "trigger",
+                "x": 7,
+                "y": 0,
+                "z": 7,
+                "name": "portal",
+                "triggerId": "portal",
+                "characterId": ""
+              }
+            ],
+            "start": {
+              "x": 7.5,
+              "y": 0,
+              "z": 7.5
+            },
+            "blocks": []
+          },
+          "dialogue": {
+            "lines": [],
+            "characters": []
+          },
+          "actorScale": 2,
+          "idleFrame": 0,
+          "walkFrame": 1,
+          "jumpFrame": 2,
+          "sceneWidth": 640,
+          "sceneHeight": 360,
+          "cameraFollow": true,
+          "worldWidth": 1000,
+          "groundY": 316,
+          "moveSpeed": 4,
+          "props": [
+            {
+              "x": 170,
+              "y": 260,
+              "frame": 0,
+              "scale": 3,
+              "solid": false,
+              "nodeTriggerId": "portal"
+            }
+          ]
+        },
+        {
+          "id": "scene-b",
+          "name": "Voxel tower",
+          "worldType": "voxel3d",
+          "voxelWorld": {
+            "width": 16,
+            "depth": 16,
+            "height": 12,
+            "cellSize": 38,
+            "yaw": 0,
+            "cameraAngle": 0,
+            "cameraTilt": 0.5,
+            "turntable": false,
+            "markers": [
+              {
+                "id": "return-marker",
+                "kind": "trigger",
+                "x": 9,
+                "y": 0,
+                "z": 7,
+                "triggerId": "return",
+                "name": "Return to 2D"
+              }
+            ],
+            "start": {
+              "x": 7.5,
+              "y": 0,
+              "z": 7.5
+            },
+            "blocks": [
+              {
+                "x": 1,
+                "y": 0,
+                "z": 1,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 1,
+                "y": 0,
+                "z": 3,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 1,
+                "y": 0,
+                "z": 4,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 1,
+                "y": 0,
+                "z": 6,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 1,
+                "y": 0,
+                "z": 7,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 1,
+                "y": 0,
+                "z": 9,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 1,
+                "y": 0,
+                "z": 10,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 1,
+                "y": 0,
+                "z": 12,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 1,
+                "y": 0,
+                "z": 13,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 2,
+                "y": 0,
+                "z": 14,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 3,
+                "y": 0,
+                "z": 1,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 3,
+                "y": 0,
+                "z": 14,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 4,
+                "y": 0,
+                "z": 1,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 5,
+                "y": 0,
+                "z": 14,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 6,
+                "y": 0,
+                "z": 1,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 6,
+                "y": 0,
+                "z": 14,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 7,
+                "y": 0,
+                "z": 1,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 8,
+                "y": 0,
+                "z": 14,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 9,
+                "y": 0,
+                "z": 1,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 9,
+                "y": 0,
+                "z": 14,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 10,
+                "y": 0,
+                "z": 1,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 11,
+                "y": 0,
+                "z": 14,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 12,
+                "y": 0,
+                "z": 1,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 12,
+                "y": 0,
+                "z": 14,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 13,
+                "y": 0,
+                "z": 1,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 14,
+                "y": 0,
+                "z": 2,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 14,
+                "y": 0,
+                "z": 3,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 14,
+                "y": 0,
+                "z": 5,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 14,
+                "y": 0,
+                "z": 6,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 14,
+                "y": 0,
+                "z": 8,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 14,
+                "y": 0,
+                "z": 9,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 14,
+                "y": 0,
+                "z": 11,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 14,
+                "y": 0,
+                "z": 12,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 14,
+                "y": 0,
+                "z": 14,
+                "color": "#7ba48c"
+              },
+              {
+                "x": 3,
+                "y": 0,
+                "z": 3,
+                "color": "#b2a5d8"
+              },
+              {
+                "x": 3,
+                "y": 0,
+                "z": 4,
+                "color": "#b2a5d8"
+              },
+              {
+                "x": 3,
+                "y": 0,
+                "z": 5,
+                "color": "#b2a5d8"
+              },
+              {
+                "x": 4,
+                "y": 0,
+                "z": 3,
+                "color": "#b2a5d8"
+              },
+              {
+                "x": 4,
+                "y": 0,
+                "z": 4,
+                "color": "#b2a5d8"
+              },
+              {
+                "x": 4,
+                "y": 0,
+                "z": 5,
+                "color": "#b2a5d8"
+              },
+              {
+                "x": 5,
+                "y": 0,
+                "z": 3,
+                "color": "#b2a5d8"
+              },
+              {
+                "x": 5,
+                "y": 0,
+                "z": 4,
+                "color": "#b2a5d8"
+              },
+              {
+                "x": 5,
+                "y": 0,
+                "z": 5,
+                "color": "#b2a5d8"
+              },
+              {
+                "x": 4,
+                "y": 1,
+                "z": 4,
+                "color": "#8d80bd"
+              },
+              {
+                "x": 4,
+                "y": 1,
+                "z": 5,
+                "color": "#8d80bd"
+              },
+              {
+                "x": 5,
+                "y": 1,
+                "z": 4,
+                "color": "#8d80bd"
+              },
+              {
+                "x": 5,
+                "y": 1,
+                "z": 5,
+                "color": "#8d80bd"
+              },
+              {
+                "x": 10,
+                "y": 0,
+                "z": 3,
+                "color": "#d99a76"
+              },
+              {
+                "x": 10,
+                "y": 0,
+                "z": 4,
+                "color": "#d99a76"
+              },
+              {
+                "x": 10,
+                "y": 0,
+                "z": 5,
+                "color": "#d99a76"
+              },
+              {
+                "x": 11,
+                "y": 0,
+                "z": 3,
+                "color": "#d99a76"
+              },
+              {
+                "x": 11,
+                "y": 0,
+                "z": 4,
+                "color": "#d99a76"
+              },
+              {
+                "x": 11,
+                "y": 0,
+                "z": 5,
+                "color": "#d99a76"
+              },
+              {
+                "x": 12,
+                "y": 0,
+                "z": 3,
+                "color": "#d99a76"
+              },
+              {
+                "x": 12,
+                "y": 0,
+                "z": 4,
+                "color": "#d99a76"
+              },
+              {
+                "x": 12,
+                "y": 0,
+                "z": 5,
+                "color": "#d99a76"
+              },
+              {
+                "x": 10,
+                "y": 1,
+                "z": 3,
+                "color": "#d1b58c"
+              },
+              {
+                "x": 12,
+                "y": 1,
+                "z": 3,
+                "color": "#d1b58c"
+              },
+              {
+                "x": 10,
+                "y": 1,
+                "z": 5,
+                "color": "#d1b58c"
+              },
+              {
+                "x": 12,
+                "y": 1,
+                "z": 5,
+                "color": "#d1b58c"
+              },
+              {
+                "x": 10,
+                "y": 2,
+                "z": 3,
+                "color": "#d1b58c"
+              },
+              {
+                "x": 12,
+                "y": 2,
+                "z": 3,
+                "color": "#d1b58c"
+              },
+              {
+                "x": 10,
+                "y": 2,
+                "z": 5,
+                "color": "#d1b58c"
+              },
+              {
+                "x": 12,
+                "y": 2,
+                "z": 5,
+                "color": "#d1b58c"
+              },
+              {
+                "x": 10,
+                "y": 3,
+                "z": 3,
+                "color": "#d1b58c"
+              },
+              {
+                "x": 12,
+                "y": 3,
+                "z": 3,
+                "color": "#d1b58c"
+              },
+              {
+                "x": 10,
+                "y": 3,
+                "z": 5,
+                "color": "#d1b58c"
+              },
+              {
+                "x": 12,
+                "y": 3,
+                "z": 5,
+                "color": "#d1b58c"
+              },
+              {
+                "x": 9,
+                "y": 4,
+                "z": 2,
+                "color": "#a96467"
+              },
+              {
+                "x": 9,
+                "y": 4,
+                "z": 3,
+                "color": "#a96467"
+              },
+              {
+                "x": 9,
+                "y": 4,
+                "z": 4,
+                "color": "#a96467"
+              },
+              {
+                "x": 9,
+                "y": 4,
+                "z": 5,
+                "color": "#a96467"
+              },
+              {
+                "x": 9,
+                "y": 4,
+                "z": 6,
+                "color": "#a96467"
+              },
+              {
+                "x": 10,
+                "y": 4,
+                "z": 2,
+                "color": "#a96467"
+              },
+              {
+                "x": 10,
+                "y": 4,
+                "z": 3,
+                "color": "#a96467"
+              },
+              {
+                "x": 10,
+                "y": 4,
+                "z": 4,
+                "color": "#a96467"
+              },
+              {
+                "x": 10,
+                "y": 4,
+                "z": 5,
+                "color": "#a96467"
+              },
+              {
+                "x": 10,
+                "y": 4,
+                "z": 6,
+                "color": "#a96467"
+              },
+              {
+                "x": 11,
+                "y": 4,
+                "z": 2,
+                "color": "#a96467"
+              },
+              {
+                "x": 11,
+                "y": 4,
+                "z": 3,
+                "color": "#a96467"
+              },
+              {
+                "x": 11,
+                "y": 4,
+                "z": 4,
+                "color": "#a96467"
+              },
+              {
+                "x": 11,
+                "y": 4,
+                "z": 5,
+                "color": "#a96467"
+              },
+              {
+                "x": 11,
+                "y": 4,
+                "z": 6,
+                "color": "#a96467"
+              },
+              {
+                "x": 12,
+                "y": 4,
+                "z": 2,
+                "color": "#a96467"
+              },
+              {
+                "x": 12,
+                "y": 4,
+                "z": 3,
+                "color": "#a96467"
+              },
+              {
+                "x": 12,
+                "y": 4,
+                "z": 4,
+                "color": "#a96467"
+              },
+              {
+                "x": 12,
+                "y": 4,
+                "z": 5,
+                "color": "#a96467"
+              },
+              {
+                "x": 12,
+                "y": 4,
+                "z": 6,
+                "color": "#a96467"
+              },
+              {
+                "x": 13,
+                "y": 4,
+                "z": 2,
+                "color": "#a96467"
+              },
+              {
+                "x": 13,
+                "y": 4,
+                "z": 3,
+                "color": "#a96467"
+              },
+              {
+                "x": 13,
+                "y": 4,
+                "z": 4,
+                "color": "#a96467"
+              },
+              {
+                "x": 13,
+                "y": 4,
+                "z": 5,
+                "color": "#a96467"
+              },
+              {
+                "x": 13,
+                "y": 4,
+                "z": 6,
+                "color": "#a96467"
+              },
+              {
+                "x": 3,
+                "y": 0,
+                "z": 11,
+                "color": "#9ec0d4"
+              },
+              {
+                "x": 4,
+                "y": 0,
+                "z": 11,
+                "color": "#9ec0d4"
+              },
+              {
+                "x": 5,
+                "y": 0,
+                "z": 11,
+                "color": "#9ec0d4"
+              },
+              {
+                "x": 6,
+                "y": 0,
+                "z": 11,
+                "color": "#9ec0d4"
+              },
+              {
+                "x": 7,
+                "y": 0,
+                "z": 11,
+                "color": "#9ec0d4"
+              },
+              {
+                "x": 8,
+                "y": 0,
+                "z": 11,
+                "color": "#9ec0d4"
+              },
+              {
+                "x": 9,
+                "y": 0,
+                "z": 11,
+                "color": "#9ec0d4"
+              },
+              {
+                "x": 10,
+                "y": 0,
+                "z": 11,
+                "color": "#9ec0d4"
+              },
+              {
+                "x": 11,
+                "y": 0,
+                "z": 11,
+                "color": "#9ec0d4"
+              },
+              {
+                "x": 7,
+                "y": 0,
+                "z": 5,
+                "color": "#d4bc79"
+              },
+              {
+                "x": 8,
+                "y": 0,
+                "z": 5,
+                "color": "#d4bc79"
+              },
+              {
+                "x": 8,
+                "y": 1,
+                "z": 5,
+                "color": "#d4bc79"
+              }
+            ]
+          },
+          "dialogue": {
+            "lines": [],
+            "characters": []
+          },
+          "actorScale": 2,
+          "idleFrame": 0,
+          "walkFrame": 1,
+          "jumpFrame": 2,
+          "sceneWidth": 640,
+          "sceneHeight": 360,
+          "cameraFollow": true
+        }
+      ],
+      "nodeEditor": {
+        "nodes": [
+          {
+            "id": "start-a",
+            "type": "eventStart",
+            "name": "Enter courtyard",
+            "next": "intro",
+            "data": {
+              "sceneId": "scene-a"
+            },
+            "x": 50,
+            "y": 40
+          },
+          {
+            "id": "intro",
+            "type": "actionMessage",
+            "name": "Explain portal",
+            "next": "",
+            "data": {
+              "message": "Walk RIGHT to the portal object to enter the voxel world."
+            },
+            "x": 360,
+            "y": 40
+          },
+          {
+            "id": "touch-a",
+            "type": "eventTrigger",
+            "name": "Touch 2D portal",
+            "next": "give",
+            "data": {
+              "sceneId": "scene-a",
+              "trigger": "portal"
+            },
+            "x": 50,
+            "y": 270
+          },
+          {
+            "id": "give",
+            "type": "actionAddItem",
+            "name": "Keep key",
+            "next": "enter-b",
+            "data": {
+              "item": "courtyard_key"
+            },
+            "x": 350,
+            "y": 270
+          },
+          {
+            "id": "enter-b",
+            "type": "actionScene",
+            "name": "Enter voxel tower",
+            "next": "",
+            "data": {
+              "sceneId": "scene-b"
+            },
+            "x": 650,
+            "y": 270
+          },
+          {
+            "id": "start-b",
+            "type": "eventStart",
+            "name": "Enter tower",
+            "next": "flag-b",
+            "data": {
+              "sceneId": "scene-b"
+            },
+            "x": 50,
+            "y": 550
+          },
+          {
+            "id": "flag-b",
+            "type": "actionSetVariable",
+            "name": "Keep progress",
+            "next": "arrival",
+            "data": {
+              "variable": "visited_voxel",
+              "value": "yes"
+            },
+            "x": 350,
+            "y": 550
+          },
+          {
+            "id": "arrival",
+            "type": "actionMessage",
+            "name": "Arrival hint",
+            "next": "",
+            "data": {
+              "message": "Explore with WASD, then touch the Return marker."
+            },
+            "x": 650,
+            "y": 550
+          },
+          {
+            "id": "touch-b",
+            "type": "eventTrigger",
+            "name": "Touch voxel return",
+            "next": "return-a",
+            "data": {
+              "sceneId": "scene-b",
+              "trigger": "return"
+            },
+            "x": 50,
+            "y": 810
+          },
+          {
+            "id": "return-a",
+            "type": "actionScene",
+            "name": "Return to courtyard",
+            "next": "",
+            "data": {
+              "sceneId": "scene-a"
+            },
+            "x": 350,
+            "y": 810
+          }
+        ],
+        "selectedId": "event-portal",
+        "runtime": {
+          "variables": {},
+          "inventory": []
+        }
+      },
+      "props": [
+        {
+          "x": 170,
+          "y": 260,
+          "frame": 0,
+          "scale": 3,
+          "solid": false,
+          "nodeTriggerId": "portal"
+        }
+      ],
+      "variables": {},
+      "inventory": [],
+      "prefabs": [],
+      "audioLibrary": [],
+      "dialogue": {
+        "enabled": false,
+        "lines": [],
+        "characters": []
+      },
+      "visualLayers": [],
+      "audio": {
+        "assetId": "",
+        "name": "",
+        "dataUrl": "",
+        "volume": 0.7,
+        "loop": true
+      },
+      "ruleSeed": 20261122
+    },
+    "format": "pixel-bug-project",
+    "schemaVersion": 2
+  },
+  "checksum": {
+    "algorithm": "fnv1a32",
+    "value": "35b5ba40"
+  }
+}
