@@ -39,6 +39,10 @@ Pixel Bug is a desktop pixel-art, animation, voxel, print, and small-game editor
 - Touch-safe undo and redo handling
 - Rearrange remains available in Touch Mode
 
+
+![Pixel Bug Screenshot](https://raw.githubusercontent.com/keyouts/PixelBug/6cf8f32a8df72996e7cc9b3f7ddef63aef7356bc/PixelBugScreenshot.jpg)
+
+
 ### Image Tools
 
 - Pixelize imported images and bring the result into the active layer
